@@ -62,7 +62,7 @@ def generate_positions(
     output.parent.mkdir(parents=True, exist_ok=True)
 
     if solver is None:
-        solver = PonsSolver()
+        solver = PonsSolver(fallback_depth=4)
 
     positions = []
     games_played = 0
@@ -70,8 +70,8 @@ def generate_positions(
     with tqdm(total=n, desc="Generating positions") as pbar:
         while len(positions) < n:
             # Create a game with random-depth minimax players
-            depth1 = random.randint(2, 8)
-            depth2 = random.randint(2, 8)
+            depth1 = random.randint(2, 6)
+            depth2 = random.randint(2, 6)
             solver1 = MinimaxSolver(depth=depth1)
             solver2 = MinimaxSolver(depth=depth2)
 
