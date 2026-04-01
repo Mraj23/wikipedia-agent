@@ -1,0 +1,38 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Checkpoints and model weights
+checkpoints/
+*.bin
+*.safetensors
+
+# Data (keep .gitkeep)
+data/*.jsonl
+data/*.json
+data/pons_benchmark/
+
+# Results and logs
+results/
+logs/
+
+# Solver binary
+connect4_solver
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Pytest
+.pytest_cache/
+
+# Environment
+.env
+venv/

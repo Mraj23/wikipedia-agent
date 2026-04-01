@@ -1,0 +1,14 @@
+open_spiel
+torch>=2.0.0
+transformers>=4.51.0
+datasets
+numpy
+tqdm
+matplotlib
+pytest
+accelerate
+peft
+pandas
+scipy
+# vllm  # GPU only, install separately
+# oat-llm==0.2.1  # install separately for training
