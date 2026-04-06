@@ -6,6 +6,7 @@ returns one line of space-separated integers — one score per column.
 """
 
 import logging
+import os
 import subprocess
 import shutil
 from pathlib import Path
@@ -35,7 +36,12 @@ class PonsSolver:
             solver_path: Path to the Pons solver binary.
             fallback_depth: Minimax depth to use when binary is absent.
         """
-        self._solver_path = Path(solver_path)
+        # Resolve relative paths from the project root (parent of env/)
+        path = Path(solver_path)
+        if not path.is_absolute():
+            project_root = Path(__file__).resolve().parent.parent
+            path = project_root / path
+        self._solver_path = path.resolve()
         self._fallback = MinimaxSolver(depth=fallback_depth)
         self._warned_fallback = False
 
@@ -45,7 +51,7 @@ class PonsSolver:
         Returns:
             True if the binary can be run.
         """
-        return self._solver_path.is_file() and shutil.which(str(self._solver_path)) is not None
+        return self._solver_path.is_file() and os.access(self._solver_path, os.X_OK)
 
     def _warn_fallback(self) -> None:
         """Log a single warning about falling back to minimax."""
@@ -81,6 +87,9 @@ class PonsSolver:
     def _analyze_pons(self, env: ConnectFourEnv) -> Dict[int, int]:
         """Call the Pons binary for analysis.
 
+        The Pons solver returns one score per position. To get per-column scores,
+        we batch all legal moves into a single solver call (one line per move).
+
         Args:
             env: Current game environment.
 
@@ -88,14 +97,20 @@ class PonsSolver:
             Dict mapping legal column -> integer score.
         """
         move_seq = env.to_move_sequence()
+        # Convert 0-indexed to 1-indexed for the Pons binary
+        base = "".join(str(int(c) + 1) for c in move_seq)
+        legal = env.legal_moves()
+
+        # Build batch input: one line per legal column
+        lines = []
+        for col in legal:
+            lines.append(base + str(col + 1))
+        batch_input = "\n".join(lines) + "\n"
+
         try:
-            # Pons solver expects 1-indexed columns, but the standard binary
-            # from PascalPons/connect4 uses 1-indexed input.
-            # Convert 0-indexed to 1-indexed for the binary.
-            pons_input = "".join(str(int(c) + 1) for c in move_seq)
             result = subprocess.run(
                 [str(self._solver_path)],
-                input=pons_input + "\n",
+                input=batch_input,
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -105,43 +120,40 @@ class PonsSolver:
                 self._warn_fallback()
                 return self._analyze_minimax(env)
 
-            return self._parse_pons_output(result.stdout, env)
+            return self._parse_pons_batch(result.stdout, legal)
         except (subprocess.TimeoutExpired, OSError) as e:
             logger.warning("Pons solver failed: %s. Falling back to minimax.", e)
             return self._analyze_minimax(env)
 
-    def _parse_pons_output(self, output: str, env: ConnectFourEnv) -> Dict[int, int]:
-        """Parse the Pons solver output.
+    def _parse_pons_batch(self, output: str, legal: list) -> Dict[int, int]:
+        """Parse batched Pons solver output.
 
-        The binary returns one line with space-separated scores per column.
+        Each output line is: 'move_sequence score'
 
         Args:
             output: Raw stdout from the Pons binary.
-            env: Current environment (for legal move validation).
+            legal: List of legal columns corresponding to input lines.
 
         Returns:
-            Dict mapping legal column -> integer score.
+            Dict mapping legal column -> integer score (negated, since Pons
+            scores the position after the move from the opponent's perspective).
         """
-        legal = set(env.legal_moves())
         scores: Dict[int, int] = {}
-        lines = output.strip().split("\n")
-        if not lines:
-            return self._analyze_minimax(env)
+        out_lines = [l.strip() for l in output.strip().split("\n") if l.strip()]
 
-        # Take the last line (some versions print headers)
-        parts = lines[-1].strip().split()
-        for col_idx, val_str in enumerate(parts):
-            if col_idx >= ConnectFourEnv.COLS:
-                break
-            try:
-                val = int(val_str)
-            except ValueError:
-                continue
-            if col_idx in legal and val > self.ILLEGAL_SENTINEL:
-                scores[col_idx] = val
+        for col, line in zip(legal, out_lines):
+            parts = line.split()
+            if len(parts) >= 2:
+                try:
+                    # Pons returns the score from the perspective of the player
+                    # who just moved (the opponent of current player). Negate so
+                    # higher = better for the current player.
+                    scores[col] = -int(parts[-1])
+                except ValueError:
+                    continue
 
         if not scores:
-            return self._analyze_minimax(env)
+            return self._analyze_minimax(ConnectFourEnv())
         return scores
 
     def _analyze_minimax(self, env: ConnectFourEnv) -> Dict[int, int]:
@@ -157,6 +169,62 @@ class PonsSolver:
         """
         float_scores = self._fallback.analyze(env)
         return {col: int(score * 100) for col, score in float_scores.items()}
+
+    def analyze_batch(self, envs: list) -> list:
+        """Analyze multiple positions in a single solver call.
+
+        Args:
+            envs: List of ConnectFourEnv objects.
+
+        Returns:
+            List of score dicts (same order as envs).
+        """
+        if not self.is_available() or not envs:
+            return [self.analyze(env) for env in envs]
+
+        # Build batch: for each env, one line per legal column
+        all_lines = []
+        env_col_map = []  # (env_idx, col) for each line
+        for i, env in enumerate(envs):
+            move_seq = env.to_move_sequence()
+            base = "".join(str(int(c) + 1) for c in move_seq)
+            for col in env.legal_moves():
+                all_lines.append(base + str(col + 1))
+                env_col_map.append((i, col))
+
+        batch_input = "\n".join(all_lines) + "\n"
+
+        try:
+            result = subprocess.run(
+                [str(self._solver_path)],
+                input=batch_input,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            if result.returncode != 0:
+                return [self.analyze(env) for env in envs]
+
+            out_lines = [l.strip() for l in result.stdout.strip().split("\n") if l.strip()]
+
+            # Parse into per-env score dicts
+            results = [{} for _ in envs]
+            for (env_idx, col), line in zip(env_col_map, out_lines):
+                parts = line.split()
+                if len(parts) >= 2:
+                    try:
+                        results[env_idx][col] = -int(parts[-1])
+                    except ValueError:
+                        pass
+
+            # Fallback for any env with no scores
+            for i, scores in enumerate(results):
+                if not scores:
+                    results[i] = self._analyze_minimax(envs[i])
+
+            return results
+        except (subprocess.TimeoutExpired, OSError):
+            return [self.analyze(env) for env in envs]
 
     def best_move(self, env: ConnectFourEnv) -> int:
         """Return the best column to play.

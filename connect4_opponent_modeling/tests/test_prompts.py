@@ -40,9 +40,10 @@ def test_parse_response_condition_a():
 
 
 def test_parse_response_condition_d():
-    """Extracts future_state."""
+    """Extracts future_state and opponent_prediction."""
     resp = (
         "<think>Playing center.</think>"
+        "<opponent_prediction>4</opponent_prediction>"
         "<future_state>. . . . . . .\n. . . . . . .</future_state>"
         "<move>3</move>"
     )
@@ -50,6 +51,7 @@ def test_parse_response_condition_d():
     assert parsed["move"] == 3
     assert parsed["future_state"] is not None
     assert "." in parsed["future_state"]
+    assert parsed["opponent_prediction"] == 4
 
 
 def test_parse_response_condition_e():

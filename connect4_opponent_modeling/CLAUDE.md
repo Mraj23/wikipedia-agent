@@ -11,9 +11,9 @@ Causal study of whether explicit opponent modeling during RL training develops t
 - **A: SFT only** — imitation baseline. Supervised fine-tuning on solver-optimal moves.
 - **B: Self-play RL** — adds adversarial pressure via win/loss rewards.
 - **C: Solver-RL (value)** — adds position evaluation via Pons solver rewards.
-- **D: Solver-RL + future-state** — adds forward projection after own move.
-- **E: Solver-RL + opponent modeling** — adds adversarial projection after opponent response.
-- **F: Prompt-only baseline** — inference-time opponent reasoning with no RL training (ReTA comparison).
+- **D: Solver-RL + future-state** — adds forward projection after own move. Outputs `<opponent_prediction>` + `<future_state>` + `<move>`, but only future-state accuracy is rewarded (opponent prediction is unrewarded, equalizing output format with E).
+- **E: Solver-RL + opponent modeling** — adds adversarial projection after opponent response. Outputs `<opponent_prediction>` + `<move>`, with opponent prediction accuracy rewarded.
+- **F: Prompt-only baseline** — inference-time opponent reasoning with no RL training (ReTA comparison). Uses F-tuned SFT checkpoint trained on E/F-style prompts so the format is in-distribution.
 
 ### Key Comparisons
 

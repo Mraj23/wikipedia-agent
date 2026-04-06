@@ -46,6 +46,7 @@ def test_condition_d_in_range():
     env.make_move(4)
     response = (
         "<think>test</think>"
+        "<opponent_prediction>3</opponent_prediction>"
         "<future_state>. . . . . . .\n. . . . . . .\n. . . . . . .\n"
         ". . . . . . .\n. . . . . . .\n. . X X O . .</future_state>"
         "<move>2</move>"

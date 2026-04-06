@@ -10,5 +10,6 @@ accelerate
 peft
 pandas
 scipy
+tensorboard
 # vllm  # GPU only, install separately
 # oat-llm==0.2.1  # install separately for training

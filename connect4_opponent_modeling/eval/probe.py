@@ -243,7 +243,11 @@ def run_probe(
             continue
 
         # Get optimal opponent response
-        optimal = solver.optimal_opponent_response(env, test_col)
+        try:
+            optimal = solver.optimal_opponent_response(env, test_col)
+        except (ValueError, Exception):
+            # Skip positions where the solver can't determine opponent response
+            continue
         correct = int(predicted == optimal)
         results[cat].append(correct)
         total_correct += correct

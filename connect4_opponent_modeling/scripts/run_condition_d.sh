@@ -22,11 +22,11 @@ else:
     print('Probe positions already locked.')
 "
 
-# 3. Launch SPIRAL training (placeholder — fill in your SPIRAL command)
+# 3. Launch SPIRAL training
 mkdir -p $LOG_DIR
 echo "Starting Condition $CONDITION RL training..."
-# python -m spiral.train --config training/grpo_config.py --condition $CONDITION \
-#   --model $SFT_CKPT --log_dir $LOG_DIR
+python -m spiral.train --condition $CONDITION \
+  --model $SFT_CKPT --log_dir $LOG_DIR
 
 # 4. Eval every 1000 steps (called by training loop via callback)
 echo "Training complete. Running final eval..."

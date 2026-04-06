@@ -49,12 +49,18 @@ CONDITION_PROMPTS: Dict[str, str] = {
         "Legal moves: {legal_moves}\n\n"
         "Analyze this position carefully. Consider threats, opportunities, and "
         "the strategic value of each legal move.\n"
+        "Before choosing your move, predict how your opponent will respond to "
+        "your top candidate moves. State your prediction in the "
+        "<opponent_prediction> tag.\n"
         "After choosing your move, predict the board state that will result from "
         "your move. Show it as a text grid in the <future_state> tag.\n"
-        "Respond with your analysis in <think> tags, the predicted board state in "
+        "Respond with your analysis in <think> tags, your opponent's predicted "
+        "response column in <opponent_prediction> tags, the predicted board state in "
         "<future_state> tags, then your move in <move> tags.\n"
         "Example:\n"
-        "<think>Column 3 builds toward a vertical connection.</think>"
+        "<think>Column 3 builds toward a vertical connection. Opponent likely "
+        "responds column 4.</think>"
+        "<opponent_prediction>4</opponent_prediction>"
         "<future_state>\n"
         ". . . . . . .\n"
         ". . . . . . .\n"
@@ -108,7 +114,7 @@ REQUIRED_TAGS: Dict[str, List[str]] = {
     "A": ["think", "move"],
     "B": ["think", "move"],
     "C": ["think", "move"],
-    "D": ["think", "future_state", "move"],
+    "D": ["think", "opponent_prediction", "future_state", "move"],
     "E": ["think", "opponent_prediction", "move"],
     "F": ["think", "opponent_prediction", "move"],
 }
@@ -162,8 +168,8 @@ def parse_response(response: str, condition: str) -> Dict:
     if move_match:
         result["move"] = int(move_match.group(1))
 
-    # Extract <opponent_prediction>...</opponent_prediction> (conditions E, F)
-    if condition in ("E", "F"):
+    # Extract <opponent_prediction>...</opponent_prediction> (conditions D, E, F)
+    if condition in ("D", "E", "F"):
         pred_match = re.search(r"<opponent_prediction>\s*(\d)\s*</opponent_prediction>", response)
         if pred_match:
             result["opponent_prediction"] = int(pred_match.group(1))

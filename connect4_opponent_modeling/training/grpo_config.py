@@ -37,6 +37,7 @@ class GRPOConfig:
     eval_every: int = 1000
     opponent_depth: int = 6
     use_rae: bool = True
+    seed: int = 42
     reward_weights: Optional[Dict[str, float]] = field(default=None)
 
 
