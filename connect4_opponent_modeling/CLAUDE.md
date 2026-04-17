@@ -14,6 +14,7 @@ Causal study of whether explicit opponent modeling during RL training develops t
 - **D: Solver-RL + future-state** — adds forward projection after own move. Outputs `<opponent_prediction>` + `<future_state>` + `<move>`, but only future-state accuracy is rewarded (opponent prediction is unrewarded, equalizing output format with E).
 - **E: Solver-RL + opponent modeling** — adds adversarial projection after opponent response. Outputs `<opponent_prediction>` + `<move>`, with opponent prediction accuracy rewarded.
 - **F: Prompt-only baseline** — inference-time opponent reasoning with no RL training (ReTA comparison). Uses F-tuned SFT checkpoint trained on E/F-style prompts so the format is in-distribution.
+- **G: Negative control** — same structure as E but with a meaningless auxiliary task (predict piece count mod 7). Same 0.2 reward weight. If G transfers as well as E, then any auxiliary task helps and opponent modeling is not specifically important.
 
 ### Key Comparisons
 

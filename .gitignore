@@ -22,5 +22,6 @@ checkpoints/
 logs/
 results/
 
-# Solver binary
+# Solver binary and opening book
 connect4_solver
+*.book

@@ -19,8 +19,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--condition", type=str, required=True,
-        choices=["B", "C", "D", "E"],
-        help="Experimental condition (B, C, D, or E)",
+        choices=["B", "C", "D", "E", "G"],
+        help="Experimental condition (B, C, D, E, or G)",
     )
     parser.add_argument(
         "--model", type=str, default="checkpoints/condition_a",
@@ -45,6 +45,22 @@ def main() -> None:
     parser.add_argument(
         "--seed", type=int, default=None,
         help="Random seed for reproducibility (default: 42)",
+    )
+    parser.add_argument(
+        "--use_vllm", action="store_true",
+        help="Use vLLM for fast generation (GPU only, requires vllm installed)",
+    )
+    parser.add_argument(
+        "--wandb", action="store_true",
+        help="Enable Weights & Biases logging for real-time monitoring",
+    )
+    parser.add_argument(
+        "--wandb_project", type=str, default="connect4-opponent-modeling",
+        help="W&B project name (default: connect4-opponent-modeling)",
+    )
+    parser.add_argument(
+        "--wandb_run_name", type=str, default=None,
+        help="W&B run name (default: condition_{letter})",
     )
     args = parser.parse_args()
 
@@ -72,6 +88,14 @@ def main() -> None:
         config.group_size = args.group_size
     if args.seed is not None:
         config.seed = args.seed
+    if args.use_vllm:
+        config.use_vllm = True
+    if args.wandb:
+        config.use_wandb = True
+    if args.wandb_project:
+        config.wandb_project = args.wandb_project
+    if args.wandb_run_name:
+        config.wandb_run_name = args.wandb_run_name
 
     # Log directory
     log_dir = args.log_dir or f"logs/condition_{args.condition.lower()}"
@@ -85,6 +109,7 @@ def main() -> None:
     logger.info("Clip ratio: %f", config.clip_ratio)
     logger.info("Use RAE: %s", config.use_rae)
     logger.info("Reward weights: %s", config.reward_weights)
+    logger.info("W&B: %s", "enabled" if config.use_wandb else "disabled")
     logger.info("Log dir: %s", log_dir)
 
     # Train

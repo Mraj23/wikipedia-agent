@@ -117,6 +117,50 @@ class RewardCalculator:
         fr = self._format_reward(response, "E")
         return 0.5 * mq + 0.2 * pa + 0.2 * tr + 0.1 * fr
 
+    def condition_g_reward(
+        self,
+        env: ConnectFourEnv,
+        played_col: int,
+        predicted_count: int,
+        game_result: str,
+        response: str,
+    ) -> float:
+        """Composite reward for condition G (negative control): 0.5*move + 0.2*count + 0.2*terminal + 0.1*format.
+
+        The auxiliary task (piece count mod 7) is strategically meaningless.
+        If G transfers as well as E, then any auxiliary task helps equally
+        and opponent modeling is not specifically important.
+
+        Args:
+            env: Game state BEFORE the move was played.
+            played_col: Column that was played.
+            predicted_count: The model's prediction of piece_count mod 7.
+            game_result: One of 'win', 'loss', 'draw', 'ongoing'.
+            response: Raw model response string.
+
+        Returns:
+            Float in [0, 1].
+        """
+        mq = self._move_quality(env, played_col)
+        ca = self._piece_count_accuracy(env, predicted_count)
+        tr = self._terminal_reward(game_result)
+        fr = self._format_reward(response, "G")
+        return 0.5 * mq + 0.2 * ca + 0.2 * tr + 0.1 * fr
+
+    @staticmethod
+    def _piece_count_accuracy(env: ConnectFourEnv, predicted_count: int) -> float:
+        """Score piece count prediction accuracy.
+
+        Args:
+            env: Game state.
+            predicted_count: Model's prediction of total pieces mod 7.
+
+        Returns:
+            1.0 if correct, 0.0 otherwise.
+        """
+        actual = len(env._move_history) % 7
+        return 1.0 if predicted_count == actual else 0.0
+
     def _move_quality(self, env: ConnectFourEnv, played_col: int) -> float:
         """Normalized [0,1] move quality from solver.
 

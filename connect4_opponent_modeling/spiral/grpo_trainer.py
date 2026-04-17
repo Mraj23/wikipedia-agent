@@ -34,6 +34,12 @@ from spiral.game_playout import play_to_completion
 from spiral.position_buffer import PositionBuffer
 from spiral.rae import compute_advantages
 
+try:
+    import wandb
+    _WANDB_AVAILABLE = True
+except ImportError:
+    _WANDB_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -67,7 +73,7 @@ class GRPOTrainer:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
         self.model = AutoModelForCausalLM.from_pretrained(
-            config.model_path, trust_remote_code=True, torch_dtype=self.dtype
+            config.model_path, trust_remote_code=True, dtype=self.dtype
         ).to(self.device)
 
         # Frozen reference model for KL computation
@@ -77,6 +83,24 @@ class GRPOTrainer:
             p.requires_grad_(False)
 
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=config.lr)
+
+        # vLLM engine for fast generation (GPU only)
+        self._vllm_engine = None
+        if config.use_vllm and self.device.type == "cuda":
+            try:
+                from vllm import LLM, SamplingParams
+                logger.info("Initializing vLLM engine for fast generation...")
+                self._vllm_engine = LLM(
+                    model=config.model_path,
+                    dtype="float16",
+                    gpu_memory_utilization=0.4,  # Share GPU with training model
+                    enforce_eager=True,  # Avoid CUDA graph issues with weight updates
+                )
+                logger.info("vLLM engine ready.")
+            except ImportError:
+                logger.warning("vLLM not installed. Using HF generate() (slower).")
+            except Exception as e:
+                logger.warning("vLLM init failed: %s. Using HF generate().", e)
 
         # Game infrastructure
         self.solver = PonsSolver(fallback_depth=config.opponent_depth)
@@ -105,6 +129,21 @@ class GRPOTrainer:
         # Training state
         self._step = 0
         self._train_log: List[Dict] = []
+
+        # W&B logging
+        self._wandb_run = None
+        if config.use_wandb and _WANDB_AVAILABLE:
+            run_name = config.wandb_run_name or f"condition_{config.condition.lower()}"
+            self._wandb_run = wandb.init(
+                project=config.wandb_project,
+                name=run_name,
+                config=vars(config),
+                tags=[f"condition_{config.condition}", "grpo", "connect4"],
+                reinit=True,
+            )
+            logger.info("W&B run initialized: %s", self._wandb_run.url)
+        elif config.use_wandb and not _WANDB_AVAILABLE:
+            logger.warning("use_wandb=True but wandb not installed. pip install wandb")
 
     def train(self) -> None:
         """Run the full GRPO training loop."""
@@ -148,6 +187,9 @@ class GRPOTrainer:
             # 6. Compute loss and update
             loss, kl = self._grpo_step(prompt, completions, gen_log_probs, advantages)
 
+            # 7. Sync weights to vLLM engine if using it
+            self._sync_vllm_weights()
+
             step_time = time.time() - step_start
 
             # 7. Logging
@@ -170,6 +212,27 @@ class GRPOTrainer:
                     log_entry["mean_reward"], log_entry["min_reward"],
                     log_entry["max_reward"], step_time,
                 )
+
+            # W&B per-step logging
+            if self._wandb_run is not None:
+                wandb_log = {
+                    "train/loss": loss,
+                    "train/kl": kl,
+                    "train/reward_mean": log_entry["mean_reward"],
+                    "train/reward_max": log_entry["max_reward"],
+                    "train/reward_min": log_entry["min_reward"],
+                    "train/step_time_s": step_time,
+                }
+                # Log per-component reward means across the group
+                if reward_components and reward_components[0]:
+                    for comp_name in reward_components[0]:
+                        comp_vals = [rc.get(comp_name, 0.0) for rc in reward_components]
+                        wandb_log[f"reward/{comp_name}_mean"] = sum(comp_vals) / len(comp_vals)
+                # Log advantage stats
+                if advantages is not None and advantages.numel() > 0:
+                    wandb_log["train/advantage_mean"] = advantages.mean().item()
+                    wandb_log["train/advantage_std"] = advantages.std().item()
+                self._wandb_run.log(wandb_log, step=step)
 
             # 8. Divergence detection
             if math.isnan(loss) or math.isinf(loss):
@@ -194,7 +257,17 @@ class GRPOTrainer:
 
             # 9. Periodic eval
             if step > 0 and step % self.config.eval_every == 0:
-                self.eval_callback.run(step)
+                eval_results = self.eval_callback.run(step)
+                if self._wandb_run is not None:
+                    wandb_eval = {}
+                    pons = eval_results.get("pons_benchmark", {})
+                    if "overall_pct_optimal" in pons:
+                        wandb_eval["eval/pons_pct_optimal"] = pons["overall_pct_optimal"]
+                    probe = eval_results.get("probe", {})
+                    if "overall_accuracy" in probe:
+                        wandb_eval["eval/probe_accuracy"] = probe["overall_accuracy"]
+                    if wandb_eval:
+                        self._wandb_run.log(wandb_eval, step=step)
 
             # 10. Periodic log save
             if step % 500 == 0 and step > 0:
@@ -202,14 +275,34 @@ class GRPOTrainer:
 
         # Final eval and checkpoint
         logger.info("Training complete. Running final eval...")
-        self.eval_callback.run(self.config.game_steps)
+        final_eval = self.eval_callback.run(self.config.game_steps)
         self._save_checkpoint(str(self.checkpoint_dir / "final"))
         self._save_train_log()
+
+        # W&B final logging and cleanup
+        if self._wandb_run is not None:
+            wandb_final = {"final/total_steps": self.config.game_steps}
+            pons = final_eval.get("pons_benchmark", {})
+            if "overall_pct_optimal" in pons:
+                wandb_final["final/pons_pct_optimal"] = pons["overall_pct_optimal"]
+            probe = final_eval.get("probe", {})
+            if "overall_accuracy" in probe:
+                wandb_final["final/probe_accuracy"] = probe["overall_accuracy"]
+            self._wandb_run.log(wandb_final, step=self.config.game_steps)
+            # Save training log as artifact
+            artifact = wandb.Artifact(
+                f"train_log_{self.config.condition.lower()}", type="training_log"
+            )
+            artifact.add_file(str(self.log_dir / "train_log.json"))
+            self._wandb_run.log_artifact(artifact)
+            self._wandb_run.finish()
 
     def _generate_group(
         self, prompt: str
     ) -> Tuple[List[str], List[torch.Tensor]]:
         """Generate group_size completions for a prompt.
+
+        Uses vLLM if available (much faster on GPU), falls back to HF generate().
 
         Args:
             prompt: The formatted prompt string.
@@ -217,6 +310,52 @@ class GRPOTrainer:
         Returns:
             Tuple of (decoded_texts, per_completion_log_probs).
         """
+        if self._vllm_engine is not None:
+            return self._generate_group_vllm(prompt)
+        return self._generate_group_hf(prompt)
+
+    def _generate_group_vllm(
+        self, prompt: str
+    ) -> Tuple[List[str], List[torch.Tensor]]:
+        """Generate completions using vLLM engine."""
+        from vllm import SamplingParams
+
+        params = SamplingParams(
+            n=self.config.group_size,
+            max_tokens=self.config.max_tokens,
+            min_tokens=10,
+            temperature=0.7,
+        )
+        outputs = self._vllm_engine.generate([prompt], params)
+        request_output = outputs[0]
+
+        completions = []
+        log_probs_list = []
+
+        prompt_ids = self.tokenizer(
+            prompt, return_tensors="pt", truncation=True, max_length=512
+        )["input_ids"][0].to(self.device)
+
+        for completion_output in request_output.outputs:
+            text = completion_output.text
+            completions.append(text)
+
+            # Compute log-probs under the training model (needed for GRPO loss)
+            gen_ids = self.tokenizer(
+                text, return_tensors="pt", add_special_tokens=False
+            )["input_ids"][0].to(self.device)
+            if gen_ids.numel() > 0:
+                lp = self._compute_log_probs(prompt_ids, gen_ids)
+            else:
+                lp = torch.zeros(1, device=self.device)
+            log_probs_list.append(lp)
+
+        return completions, log_probs_list
+
+    def _generate_group_hf(
+        self, prompt: str
+    ) -> Tuple[List[str], List[torch.Tensor]]:
+        """Generate completions using HuggingFace model.generate()."""
         self.model.eval()
         inputs = self.tokenizer(
             prompt, return_tensors="pt", truncation=True, max_length=512
@@ -232,8 +371,6 @@ class GRPOTrainer:
             batch = min(remaining, 4)
             with torch.no_grad():
                 # Force minimum generation length to prevent immediate EOS
-                # (the SFT model learns to emit EOS after </move>, and the
-                # prompt examples contain </move> which triggers early stopping)
                 outputs = self.model.generate(
                     **inputs,
                     max_new_tokens=self.config.max_tokens,
@@ -245,12 +382,9 @@ class GRPOTrainer:
                 )
 
             for seq in outputs:
-                # Decode only the generated part
                 gen_tokens = seq[prompt_len:]
                 text = self.tokenizer.decode(gen_tokens, skip_special_tokens=True)
                 completions.append(text)
-
-                # Compute log-probs for the generated tokens
                 lp = self._compute_log_probs(inputs["input_ids"][0], gen_tokens)
                 log_probs_list.append(lp)
 
@@ -258,6 +392,32 @@ class GRPOTrainer:
 
         self.model.train()
         return completions, log_probs_list
+
+    def _sync_vllm_weights(self) -> None:
+        """Sync training model weights to vLLM engine after optimizer step."""
+        if self._vllm_engine is None:
+            return
+        # Extract state dict from training model and load into vLLM
+        try:
+            from vllm.worker.model_runner import ModelRunner
+            state_dict = self.model.state_dict()
+            llm_model = self._vllm_engine.llm_engine.model_executor.driver_worker.model_runner.model
+            llm_model.load_weights(state_dict.items())
+            logger.debug("vLLM weights synced.")
+        except Exception as e:
+            logger.warning("vLLM weight sync failed: %s. Regenerating engine.", e)
+            # Fallback: save model to temp dir and reload vLLM
+            import tempfile
+            with tempfile.TemporaryDirectory() as tmpdir:
+                self.model.save_pretrained(tmpdir)
+                self.tokenizer.save_pretrained(tmpdir)
+                from vllm import LLM
+                self._vllm_engine = LLM(
+                    model=tmpdir,
+                    dtype="float16",
+                    gpu_memory_utilization=0.4,
+                    enforce_eager=True,
+                )
 
     def _compute_log_probs(
         self, prompt_ids: torch.Tensor, gen_ids: torch.Tensor
@@ -417,6 +577,19 @@ class GRPOTrainer:
             pred_acc = self.reward_calc._prediction_accuracy(env, played_col, predicted_opp)
             comp = {
                 "move": move_quality, "pred": pred_acc,
+                "terminal": terminal, "format": format_r,
+            }
+
+        elif condition == "G":
+            predicted_count = parsed.get("piece_count")
+            if predicted_count is None:
+                predicted_count = -1
+            reward = self.reward_calc.condition_g_reward(
+                env, played_col, predicted_count, game_result, response
+            )
+            count_acc = RewardCalculator._piece_count_accuracy(env, predicted_count)
+            comp = {
+                "move": move_quality, "count": count_acc,
                 "terminal": terminal, "format": format_r,
             }
         else:

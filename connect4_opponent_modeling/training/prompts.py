@@ -107,6 +107,22 @@ CONDITION_PROMPTS: Dict[str, str] = {
         "<opponent_prediction>2</opponent_prediction>"
         "<move>2</move>"
     ),
+    "G": (
+        "You are playing Connect Four.\n\n"
+        "{board}\n\n"
+        "Legal moves: {legal_moves}\n\n"
+        "Analyze this position carefully. Consider threats, opportunities, and "
+        "the strategic value of each legal move.\n"
+        "Before choosing your move, count the total number of pieces on the "
+        "board and predict that count modulo 7. State your prediction in the "
+        "<piece_count> tag.\n"
+        "Respond with your analysis in <think> tags, your piece count prediction "
+        "in <piece_count> tags, then your move in <move> tags.\n"
+        "Example:\n"
+        "<think>There are 5 pieces on the board. 5 mod 7 = 5.</think>"
+        "<piece_count>5</piece_count>"
+        "<move>3</move>"
+    ),
 }
 
 # Required tags per condition
@@ -117,6 +133,7 @@ REQUIRED_TAGS: Dict[str, List[str]] = {
     "D": ["think", "opponent_prediction", "future_state", "move"],
     "E": ["think", "opponent_prediction", "move"],
     "F": ["think", "opponent_prediction", "move"],
+    "G": ["think", "piece_count", "move"],
 }
 
 
@@ -155,6 +172,7 @@ def parse_response(response: str, condition: str) -> Dict:
         "move": None,
         "opponent_prediction": None,
         "future_state": None,
+        "piece_count": None,
         "raw": response,
     }
 
@@ -179,6 +197,12 @@ def parse_response(response: str, condition: str) -> Dict:
         fs_match = re.search(r"<future_state>(.*?)</future_state>", response, re.DOTALL)
         if fs_match:
             result["future_state"] = fs_match.group(1).strip()
+
+    # Extract <piece_count>...</piece_count> (condition G)
+    if condition == "G":
+        pc_match = re.search(r"<piece_count>\s*(\d+)\s*</piece_count>", response)
+        if pc_match:
+            result["piece_count"] = int(pc_match.group(1))
 
     return result
 
@@ -208,6 +232,8 @@ def validate_response(
             return False, f"Missing <opponent_prediction> tag for condition {condition}"
         elif tag == "future_state" and parsed.get("future_state") is None:
             return False, f"Missing <future_state> tag for condition {condition}"
+        elif tag == "piece_count" and parsed.get("piece_count") is None:
+            return False, f"Missing <piece_count> tag for condition {condition}"
 
     # Check move is legal
     if parsed.get("move") is not None and parsed["move"] not in legal_moves:

@@ -37,8 +37,12 @@ class GRPOConfig:
     eval_every: int = 1000
     opponent_depth: int = 6
     use_rae: bool = True
+    use_vllm: bool = False
     seed: int = 42
     reward_weights: Optional[Dict[str, float]] = field(default=None)
+    use_wandb: bool = False
+    wandb_project: str = "connect4-opponent-modeling"
+    wandb_run_name: Optional[str] = None
 
 
 # Condition-specific reward weight presets
@@ -47,6 +51,7 @@ _REWARD_WEIGHTS: Dict[str, Dict[str, float]] = {
     "C": {"move": 0.6, "terminal": 0.3, "format": 0.1},
     "D": {"move": 0.5, "future": 0.2, "terminal": 0.2, "format": 0.1},
     "E": {"move": 0.5, "pred": 0.2, "terminal": 0.2, "format": 0.1},
+    "G": {"move": 0.5, "count": 0.2, "terminal": 0.2, "format": 0.1},
 }
 
 
