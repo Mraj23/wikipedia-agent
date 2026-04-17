@@ -63,7 +63,13 @@ class GRPOTrainer:
 
         # Device setup (CPU-compatible)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.dtype = torch.float16 if self.device.type == "cuda" else torch.float32
+        # Use bf16 on GPU (better compatibility with GH200/H100), fp32 on CPU
+        if self.device.type == "cuda" and torch.cuda.is_bf16_supported():
+            self.dtype = torch.bfloat16
+        elif self.device.type == "cuda":
+            self.dtype = torch.float16
+        else:
+            self.dtype = torch.float32
 
         logger.info("Loading model from %s (device=%s)", config.model_path, self.device)
         self.tokenizer = AutoTokenizer.from_pretrained(
@@ -90,9 +96,10 @@ class GRPOTrainer:
             try:
                 from vllm import LLM, SamplingParams
                 logger.info("Initializing vLLM engine for fast generation...")
+                vllm_dtype = "bfloat16" if self.dtype == torch.bfloat16 else "float16"
                 self._vllm_engine = LLM(
                     model=config.model_path,
-                    dtype="float16",
+                    dtype=vllm_dtype,
                     gpu_memory_utilization=0.4,  # Share GPU with training model
                     enforce_eager=True,  # Avoid CUDA graph issues with weight updates
                 )
@@ -412,9 +419,10 @@ class GRPOTrainer:
                 self.model.save_pretrained(tmpdir)
                 self.tokenizer.save_pretrained(tmpdir)
                 from vllm import LLM
+                vllm_dtype = "bfloat16" if self.dtype == torch.bfloat16 else "float16"
                 self._vllm_engine = LLM(
                     model=tmpdir,
-                    dtype="float16",
+                    dtype=vllm_dtype,
                     gpu_memory_utilization=0.4,
                     enforce_eager=True,
                 )
