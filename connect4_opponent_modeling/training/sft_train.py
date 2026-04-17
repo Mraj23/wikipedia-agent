@@ -134,7 +134,7 @@ def train(
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
         trust_remote_code=True,
-        torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+        torch_dtype=torch.bfloat16 if device == "cuda" else torch.float32,
     )
 
     # Prepare datasets
@@ -169,7 +169,7 @@ def train(
         load_best_model_at_end=True,
         metric_for_best_model="eval_loss",
         report_to="none",
-        fp16=(device == "cuda"),
+        bf16=(device == "cuda"),
     )
 
     # Train
