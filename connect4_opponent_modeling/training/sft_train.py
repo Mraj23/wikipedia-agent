@@ -139,14 +139,28 @@ def train(
 
     # Prepare datasets
     def tokenize_fn(examples: Dict) -> Dict:
-        texts = [p + c for p, c in zip(examples["prompt"], examples["completion"])]
+        prompts = examples["prompt"]
+        completions = examples["completion"]
+        texts = [p + c for p, c in zip(prompts, completions)]
         tokenized = tokenizer(
             texts,
             truncation=True,
             max_length=512,
             padding="max_length",
         )
-        tokenized["labels"] = tokenized["input_ids"].copy()
+        # Mask prompt tokens in labels so loss only applies to the completion.
+        # Without this, ~90% of the gradient goes to predicting the prompt
+        # (board state, instructions) instead of the output format + move.
+        labels = []
+        for i, prompt in enumerate(prompts):
+            prompt_ids = tokenizer(prompt, truncation=True, max_length=512)["input_ids"]
+            prompt_len = len(prompt_ids)
+            label = list(tokenized["input_ids"][i])
+            # Set prompt tokens to -100 (ignored by CrossEntropyLoss)
+            for j in range(min(prompt_len, len(label))):
+                label[j] = -100
+            labels.append(label)
+        tokenized["labels"] = labels
         return tokenized
 
     train_ds = Dataset.from_list(train_data)

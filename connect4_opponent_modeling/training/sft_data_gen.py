@@ -33,6 +33,52 @@ def _estimate_depth_to_end(env: ConnectFourEnv) -> int:
     return max(1, 36 - moves_played)
 
 
+def _generate_think_text(
+    env: ConnectFourEnv,
+    best_col: int,
+    scores: dict,
+    rng: random.Random,
+) -> str:
+    """Generate varied reasoning text for SFT completions.
+
+    Uses the position context to produce diverse think-tag content so the
+    model learns the XML format pattern rather than memorising a single
+    fixed string like "Optimal play."
+    """
+    moves_played = len(env._move_history)
+    legal = env.legal_moves()
+    best_score = scores.get(best_col, 0)
+
+    # Describe why the chosen column is good
+    reasons = []
+
+    if best_col == 3:
+        reasons.append("Column 3 controls the center.")
+    elif best_col in (2, 4):
+        reasons.append(f"Column {best_col} is near the center.")
+    else:
+        reasons.append(f"Column {best_col} is the strongest move here.")
+
+    if best_score > 0:
+        reasons.append("This leads to a winning position.")
+    elif best_score == 0:
+        reasons.append("This maintains a drawn position.")
+    else:
+        reasons.append("This is the best defensive option.")
+
+    if moves_played < 8:
+        reasons.append("Early game — focus on center control.")
+    elif moves_played < 20:
+        reasons.append("Midgame — building threats.")
+    else:
+        reasons.append("Late game — precise play required.")
+
+    # Pick 1-2 reasons randomly for variety
+    n_reasons = rng.randint(1, min(2, len(reasons)))
+    selected = rng.sample(reasons, n_reasons)
+    return " ".join(selected)
+
+
 def generate_positions(
     n: int = 50000,
     output_path: str = "data/sft_warmup.jsonl",
@@ -105,12 +151,19 @@ def generate_positions(
                     break
 
                 prompt = format_prompt(condition, snapshot)
+
+                # Generate varied reasoning text so the model learns the
+                # format pattern, not just a single fixed string.
+                think_text = _generate_think_text(
+                    snapshot, best_col, scores, random
+                )
+
                 if condition in ("E", "F"):
                     # Include opponent prediction for F-tuned baseline
                     opp_response = solver.optimal_opponent_response(snapshot, best_col)
                     opp_col = opp_response if opp_response >= 0 else best_col
                     completion = (
-                        f"<think>Optimal play.</think>"
+                        f"<think>{think_text}</think>"
                         f"<opponent_prediction>{opp_col}</opponent_prediction>"
                         f"<move>{best_col}</move>"
                     )
@@ -123,13 +176,13 @@ def generate_positions(
                     future_grid = next_env.to_text_grid().split("\n")
                     future_board = "\n".join(future_grid[:6])
                     completion = (
-                        f"<think>Optimal play.</think>"
+                        f"<think>{think_text}</think>"
                         f"<opponent_prediction>{opp_col}</opponent_prediction>"
                         f"<future_state>\n{future_board}\n</future_state>"
                         f"<move>{best_col}</move>"
                     )
                 else:
-                    completion = f"<think>Optimal play.</think><move>{best_col}</move>"
+                    completion = f"<think>{think_text}</think><move>{best_col}</move>"
                 depth_to_end = _estimate_depth_to_end(snapshot)
 
                 positions.append({
