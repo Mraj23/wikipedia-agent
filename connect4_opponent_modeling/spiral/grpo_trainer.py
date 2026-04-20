@@ -516,7 +516,11 @@ class GRPOTrainer:
         condition = self.config.condition
 
         for response in completions:
-            r, comp = self._compute_single_reward(env, response)
+            # The prompt ends with an open <think> tag, so the model's
+            # response is a continuation. Prepend <think> so parse_response
+            # can find the full <think>...</think> pattern.
+            full_response = "<think>" + response
+            r, comp = self._compute_single_reward(env, full_response)
             rewards.append(r)
             components.append(comp)
 
