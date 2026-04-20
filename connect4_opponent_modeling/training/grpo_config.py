@@ -27,12 +27,12 @@ class GRPOConfig:
     """
 
     condition: str = "B"
-    model_path: str = "checkpoints/condition_a"
+    model_path: str = "Qwen/Qwen3-4B-Base"
     game_steps: int = 5000
-    group_size: int = 8
+    group_size: int = 64
     clip_ratio: float = 0.2
     kl_coef: float = 0.001
-    lr: float = 3e-6
+    lr: float = 1e-6
     max_tokens: int = 512
     eval_every: int = 1000
     opponent_depth: int = 6
@@ -56,7 +56,7 @@ _REWARD_WEIGHTS: Dict[str, Dict[str, float]] = {
 
 
 def get_config(
-    condition: str, model_path: str = "checkpoints/condition_a"
+    condition: str, model_path: str = "Qwen/Qwen3-4B-Base"
 ) -> GRPOConfig:
     """Return a condition-specific GRPO configuration.
 

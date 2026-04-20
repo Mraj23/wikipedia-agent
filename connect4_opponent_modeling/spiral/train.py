@@ -23,8 +23,8 @@ def main() -> None:
         help="Experimental condition (B, C, D, E, or G)",
     )
     parser.add_argument(
-        "--model", type=str, default="checkpoints/condition_a",
-        help="Path to SFT warmup checkpoint",
+        "--model", type=str, default="Qwen/Qwen3-4B-Base",
+        help="Model name/path (HuggingFace ID or local checkpoint)",
     )
     parser.add_argument(
         "--log_dir", type=str, default=None,
@@ -72,16 +72,16 @@ def main() -> None:
     )
     logger = logging.getLogger("spiral")
 
-    # Validate SFT checkpoint exists
-    model_path = Path(args.model)
-    if not model_path.exists():
-        logger.error(
-            "SFT checkpoint not found at %s. Run sft_train.py first.", model_path
-        )
-        sys.exit(1)
+    # Model path: can be a HuggingFace model ID or local checkpoint path
+    model_path = args.model
+    local_path = Path(model_path)
+    if local_path.exists():
+        logger.info("Using local model: %s", model_path)
+    else:
+        logger.info("Using HuggingFace model: %s (will download on first use)", model_path)
 
     # Load config
-    config = get_config(args.condition, str(model_path))
+    config = get_config(args.condition, model_path)
     if args.game_steps is not None:
         config.game_steps = args.game_steps
     if args.group_size is not None:
