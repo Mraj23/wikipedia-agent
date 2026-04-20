@@ -82,13 +82,29 @@ class GRPOTrainer:
             config.model_path, trust_remote_code=True, dtype=self.dtype
         ).to(self.device)
 
+        # Gradient checkpointing to reduce activation memory
+        if self.device.type == "cuda":
+            self.model.gradient_checkpointing_enable()
+            logger.info("Gradient checkpointing enabled.")
+
         # Frozen reference model for KL computation
         self.ref_model = deepcopy(self.model)
         self.ref_model.eval()
+        self.ref_model.gradient_checkpointing_disable()  # Not needed for inference
         for p in self.ref_model.parameters():
             p.requires_grad_(False)
 
-        self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=config.lr)
+        # Use 8-bit AdamW on GPU to reduce optimizer memory from 32GB to 8GB
+        if self.device.type == "cuda":
+            try:
+                import bitsandbytes as bnb
+                self.optimizer = bnb.optim.AdamW8bit(self.model.parameters(), lr=config.lr)
+                logger.info("Using 8-bit AdamW (bitsandbytes).")
+            except ImportError:
+                self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=config.lr)
+                logger.warning("bitsandbytes not installed, using standard AdamW.")
+        else:
+            self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=config.lr)
 
         # vLLM engine for fast generation (GPU only)
         self._vllm_engine = None
