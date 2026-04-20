@@ -153,7 +153,11 @@ def format_prompt(condition: str, env: ConnectFourEnv) -> str:
     template = CONDITION_PROMPTS[condition]
     board = env.to_text_grid()
     legal = ", ".join(str(m) for m in env.legal_moves())
-    return template.format(board=board, legal_moves=legal)
+    prompt = template.format(board=board, legal_moves=legal)
+    # Append an open <think> tag so the base model continues generating
+    # instead of stopping at the example's closing </move> tag.
+    prompt += "\n\n<think>"
+    return prompt
 
 
 def parse_response(response: str, condition: str) -> Dict:
