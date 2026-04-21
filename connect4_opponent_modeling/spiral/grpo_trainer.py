@@ -380,6 +380,13 @@ class GRPOTrainer:
     ) -> Tuple[List[str], List[torch.Tensor]]:
         """Generate completions using HuggingFace model.generate()."""
         self.model.eval()
+
+        # Disable gradient checkpointing during generation so the KV cache
+        # works. Without KV cache, generation is ~256x slower (each token
+        # requires a full forward pass over all previous tokens).
+        if hasattr(self.model, "gradient_checkpointing_disable"):
+            self.model.gradient_checkpointing_disable()
+
         inputs = self.tokenizer(
             prompt, return_tensors="pt", truncation=True, max_length=512
         ).to(self.device)
@@ -412,6 +419,10 @@ class GRPOTrainer:
                 log_probs_list.append(lp)
 
             remaining -= batch
+
+        # Re-enable gradient checkpointing for the GRPO backward pass
+        if self.device.type == "cuda" and hasattr(self.model, "gradient_checkpointing_enable"):
+            self.model.gradient_checkpointing_enable()
 
         self.model.train()
         return completions, log_probs_list
