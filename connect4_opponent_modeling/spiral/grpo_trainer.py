@@ -401,6 +401,7 @@ class GRPOTrainer:
             batch = min(remaining, 4)
             with torch.no_grad():
                 # Force minimum generation length to prevent immediate EOS
+                # Explicitly enable KV cache for fast autoregressive generation
                 outputs = self.model.generate(
                     **inputs,
                     max_new_tokens=self.config.max_tokens,
@@ -409,6 +410,7 @@ class GRPOTrainer:
                     do_sample=True,
                     temperature=0.7,
                     pad_token_id=self.tokenizer.pad_token_id,
+                    use_cache=True,
                 )
 
             for seq in outputs:
