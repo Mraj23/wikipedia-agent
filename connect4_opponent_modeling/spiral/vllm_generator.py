@@ -58,11 +58,16 @@ class VLLMGenerator:
         from vllm import LLM, SamplingParams
 
         if self._engine is None:
+            # Force clear any leftover CUDA memory before vLLM init
+            import gc
+            gc.collect()
+            torch.cuda.empty_cache()
+
             logger.info("Initializing vLLM engine...")
             self._engine = LLM(
                 model=self._weights_dir if self._step >= 0 else self._model_path,
                 dtype=self._dtype,
-                gpu_memory_utilization=0.9,
+                gpu_memory_utilization=0.85,
                 enforce_eager=True,
                 max_model_len=1024,
             )
@@ -78,18 +83,23 @@ class VLLMGenerator:
         return [out.text for out in outputs[0].outputs]
 
     def update_weights(self, model, tokenizer, step: int) -> None:
-        """Save training model weights for vLLM to load.
+        """Save training model weights for vLLM to load next time.
+
+        Does NOT destroy the engine here — that happens in _generate_group_vllm
+        after generation, when the training model moves back to GPU.
 
         Args:
-            model: The training model (on CPU or GPU).
+            model: The training model (should be on CPU when called from
+                   _generate_group_vllm, or GPU when called from _sync).
             tokenizer: The tokenizer.
             step: Current training step.
         """
         start = time.time()
+        # Save to the weights dir that vLLM will read on next init
         model.save_pretrained(self._weights_dir)
         tokenizer.save_pretrained(self._weights_dir)
         self._step = step
-        # Destroy current engine so next generate() loads new weights
+        # Mark engine as stale — will be re-created on next generate()
         self._destroy_engine()
         logger.debug("Weights saved in %.1fs", time.time() - start)
 
@@ -98,6 +108,8 @@ class VLLMGenerator:
         if self._engine is not None:
             del self._engine
             self._engine = None
+            import gc
+            gc.collect()
             torch.cuda.empty_cache()
 
     def cleanup(self) -> None:
