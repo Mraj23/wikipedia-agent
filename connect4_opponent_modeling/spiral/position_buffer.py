@@ -60,9 +60,15 @@ class PositionBuffer:
         Args:
             n: Target number of positions.
         """
+        import time
+        import sys
+
         # Track phase distribution for stratified coverage
         phase_counts = {"beginning": 0, "middle": 0, "end": 0}
         target_per_phase = n // 3
+        games_played = 0
+        start_time = time.time()
+        last_log = 0
 
         while len(self._pool) < n:
             depth1 = self._rng.randint(2, 8)
@@ -90,6 +96,8 @@ class PositionBuffer:
                     move = current_solver.best_move(env)
                 env.make_move(move)
 
+            games_played += 1
+
             # Filter and add positions
             for move_seq, phase in snapshots:
                 if len(self._pool) >= n:
@@ -110,6 +118,23 @@ class PositionBuffer:
 
                 self._pool.append(move_seq)
                 phase_counts[phase] = phase_counts.get(phase, 0) + 1
+
+            # Progress logging every 10% or every 30 seconds
+            current = len(self._pool)
+            elapsed = time.time() - start_time
+            if current - last_log >= max(1, n // 10) or elapsed - (last_log / max(1, n) * elapsed) > 30:
+                pct = current / n * 100
+                rate = current / elapsed if elapsed > 0 else 0
+                eta = (n - current) / rate if rate > 0 else 0
+                print(
+                    f"  Buffer: {current}/{n} ({pct:.0f}%) | "
+                    f"{games_played} games | "
+                    f"{elapsed:.0f}s elapsed | "
+                    f"~{eta:.0f}s remaining | "
+                    f"phases: {dict(phase_counts)}",
+                    flush=True,
+                )
+                last_log = current
 
     def _estimate_remaining(self, env: ConnectFourEnv) -> int:
         """Estimate moves remaining via quick minimax playout.
@@ -146,6 +171,39 @@ class PositionBuffer:
                 env.from_move_sequence([int(c) for c in seq])
             envs.append(env)
         return envs
+
+    def save(self, path: str) -> None:
+        """Save the position pool to a JSON file.
+
+        Args:
+            path: Output file path.
+        """
+        import json
+        from pathlib import Path
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(self._pool, f)
+
+    @classmethod
+    def load(cls, path: str, seed: int = 42) -> "PositionBuffer":
+        """Load a pre-generated position pool from a JSON file.
+
+        Skips the expensive minimax self-play generation.
+
+        Args:
+            path: Path to a JSON file saved by save().
+            seed: Random seed for sampling.
+
+        Returns:
+            PositionBuffer with pre-loaded positions.
+        """
+        import json
+        buf = cls.__new__(cls)
+        buf._rng = random.Random(seed)
+        with open(path) as f:
+            buf._pool = json.load(f)
+        buf._min_moves_remaining = 0  # Already filtered
+        return buf
 
     def __len__(self) -> int:
         return len(self._pool)

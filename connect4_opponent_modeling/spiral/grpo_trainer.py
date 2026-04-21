@@ -130,12 +130,20 @@ class GRPOTrainer:
         self.reward_calc = RewardCalculator(self.solver)
         self.minimax = MinimaxSolver(depth=config.opponent_depth)
 
-        # Position buffer
-        logger.info("Building position buffer...")
-        self.position_buffer = PositionBuffer(
-            pool_size=min(10000, max(50, config.game_steps * 2)),
-            min_moves_remaining=6 if config.condition == "B" else 2,
-        )
+        # Position buffer — load from disk if available, else generate
+        buffer_path = Path("data/position_buffer.json")
+        if buffer_path.exists():
+            logger.info("Loading position buffer from %s...", buffer_path)
+            self.position_buffer = PositionBuffer.load(str(buffer_path))
+        else:
+            logger.info("Building position buffer (no cached file at %s)...", buffer_path)
+            self.position_buffer = PositionBuffer(
+                pool_size=min(10000, max(50, config.game_steps * 2)),
+                min_moves_remaining=6 if config.condition == "B" else 2,
+            )
+            # Save for next run
+            self.position_buffer.save(str(buffer_path))
+            logger.info("Saved position buffer to %s", buffer_path)
         logger.info("Position buffer ready (%d positions)", len(self.position_buffer))
 
         # Eval callback
