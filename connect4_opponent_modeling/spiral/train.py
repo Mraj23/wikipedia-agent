@@ -23,7 +23,7 @@ def main() -> None:
         help="Experimental condition (B, C, D, E, or G)",
     )
     parser.add_argument(
-        "--model", type=str, default="Qwen/Qwen3-4B-Base",
+        "--model", type=str, default="Qwen/Qwen3-4B",
         help="Model name/path (HuggingFace ID or local checkpoint)",
     )
     parser.add_argument(

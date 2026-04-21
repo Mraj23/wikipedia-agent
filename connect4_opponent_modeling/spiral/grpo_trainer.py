@@ -82,15 +82,13 @@ class GRPOTrainer:
             config.model_path, trust_remote_code=True, dtype=self.dtype
         ).to(self.device)
 
-        # Gradient checkpointing to reduce activation memory
-        if self.device.type == "cuda":
-            self.model.gradient_checkpointing_enable()
-            logger.info("Gradient checkpointing enabled.")
+        # No gradient checkpointing — it disables KV cache, making generation
+        # ~256x slower. With 8-bit AdamW, the model fits in 80GB without it:
+        # model (8GB) + ref (8GB) + optimizer (8GB) + grads (8GB) + acts (~15GB) = ~47GB
 
         # Frozen reference model for KL computation
         self.ref_model = deepcopy(self.model)
         self.ref_model.eval()
-        self.ref_model.gradient_checkpointing_disable()  # Not needed for inference
         for p in self.ref_model.parameters():
             p.requires_grad_(False)
 
@@ -388,13 +386,6 @@ class GRPOTrainer:
     ) -> Tuple[List[str], List[torch.Tensor]]:
         """Generate completions using HuggingFace model.generate()."""
         self.model.eval()
-
-        # Disable gradient checkpointing during generation so the KV cache
-        # works. Without KV cache, generation is ~256x slower (each token
-        # requires a full forward pass over all previous tokens).
-        if hasattr(self.model, "gradient_checkpointing_disable"):
-            self.model.gradient_checkpointing_disable()
-
         inputs = self.tokenizer(
             prompt, return_tensors="pt", truncation=True, max_length=512
         ).to(self.device)
@@ -408,8 +399,6 @@ class GRPOTrainer:
         while remaining > 0:
             batch = min(remaining, 4)
             with torch.no_grad():
-                # Force minimum generation length to prevent immediate EOS
-                # Explicitly enable KV cache for fast autoregressive generation
                 outputs = self.model.generate(
                     **inputs,
                     max_new_tokens=self.config.max_tokens,
@@ -418,7 +407,6 @@ class GRPOTrainer:
                     do_sample=True,
                     temperature=0.7,
                     pad_token_id=self.tokenizer.pad_token_id,
-                    use_cache=True,
                 )
 
             for seq in outputs:
@@ -429,10 +417,6 @@ class GRPOTrainer:
                 log_probs_list.append(lp)
 
             remaining -= batch
-
-        # Re-enable gradient checkpointing for the GRPO backward pass
-        if self.device.type == "cuda" and hasattr(self.model, "gradient_checkpointing_enable"):
-            self.model.gradient_checkpointing_enable()
 
         self.model.train()
         return completions, log_probs_list
@@ -592,15 +576,15 @@ class GRPOTrainer:
             game_result = "ongoing"
 
         # Compute per-component rewards for RAE
+        # Format is a binary gate (handled above), not a weighted component.
         move_quality = self.solver.normalize_reward(env, played_col)
         terminal = RewardCalculator._terminal_reward(game_result)
-        format_r = RewardCalculator._format_reward(response, condition)
 
         if condition == "C":
             reward = self.reward_calc.condition_c_reward(
                 env, played_col, game_result, response
             )
-            comp = {"move": move_quality, "terminal": terminal, "format": format_r}
+            comp = {"move": move_quality, "terminal": terminal}
 
         elif condition == "D":
             reward = self.reward_calc.condition_d_reward(
@@ -610,7 +594,7 @@ class GRPOTrainer:
             fs_acc = self.reward_calc._future_state_accuracy(env, played_col, future_state)
             comp = {
                 "move": move_quality, "future": fs_acc,
-                "terminal": terminal, "format": format_r,
+                "terminal": terminal,
             }
             # D also extracts opponent_prediction (same format as E) but
             # does NOT reward it — the auxiliary signal comes from future_state only.
@@ -626,7 +610,7 @@ class GRPOTrainer:
             pred_acc = self.reward_calc._prediction_accuracy(env, played_col, predicted_opp)
             comp = {
                 "move": move_quality, "pred": pred_acc,
-                "terminal": terminal, "format": format_r,
+                "terminal": terminal,
             }
 
         elif condition == "G":
@@ -639,7 +623,7 @@ class GRPOTrainer:
             count_acc = RewardCalculator._piece_count_accuracy(env, predicted_count)
             comp = {
                 "move": move_quality, "count": count_acc,
-                "terminal": terminal, "format": format_r,
+                "terminal": terminal,
             }
         else:
             reward = 0.0

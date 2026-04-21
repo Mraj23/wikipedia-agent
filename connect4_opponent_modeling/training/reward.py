@@ -191,8 +191,10 @@ class RewardCalculator:
         """
         optimal = self.solver.optimal_opponent_response(env, played_col)
         if optimal == -1:
-            # Terminal after played_col — no opponent response possible
-            return 1.0
+            # Terminal after played_col — no opponent response to predict.
+            # Return 0.0 so the model only gets prediction credit for
+            # actually modeling non-terminal opponent responses.
+            return 0.0
 
         if predicted_col == optimal:
             return 1.0
@@ -201,7 +203,7 @@ class RewardCalculator:
         next_env = env.copy()
         next_env.make_move(played_col)
         if next_env.is_terminal():
-            return 1.0
+            return 0.0
 
         scores = self.solver.analyze(next_env)
         if not scores:

@@ -27,7 +27,7 @@ class GRPOConfig:
     """
 
     condition: str = "B"
-    model_path: str = "Qwen/Qwen3-4B-Base"
+    model_path: str = "Qwen/Qwen3-4B"
     game_steps: int = 5000
     group_size: int = 64
     clip_ratio: float = 0.2
@@ -46,17 +46,20 @@ class GRPOConfig:
 
 
 # Condition-specific reward weight presets
+# Format compliance is a binary gate (invalid format → reward 0), not a
+# weighted component. Instruct models produce valid format ~100% of the
+# time, so a format component has zero variance and breaks RAE.
 _REWARD_WEIGHTS: Dict[str, Dict[str, float]] = {
     "B": {},  # sparse win/loss only, no weighted components
-    "C": {"move": 0.6, "terminal": 0.3, "format": 0.1},
-    "D": {"move": 0.5, "future": 0.2, "terminal": 0.2, "format": 0.1},
-    "E": {"move": 0.5, "pred": 0.2, "terminal": 0.2, "format": 0.1},
-    "G": {"move": 0.5, "count": 0.2, "terminal": 0.2, "format": 0.1},
+    "C": {"move": 0.67, "terminal": 0.33},
+    "D": {"move": 0.56, "future": 0.22, "terminal": 0.22},
+    "E": {"move": 0.56, "pred": 0.22, "terminal": 0.22},
+    "G": {"move": 0.56, "count": 0.22, "terminal": 0.22},
 }
 
 
 def get_config(
-    condition: str, model_path: str = "Qwen/Qwen3-4B-Base"
+    condition: str, model_path: str = "Qwen/Qwen3-4B"
 ) -> GRPOConfig:
     """Return a condition-specific GRPO configuration.
 

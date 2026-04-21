@@ -78,6 +78,10 @@ def _rae_advantages(
         # Normalize this component independently
         mean = values.mean()
         std = values.std()
+        # Skip components with zero variance (e.g., format reward always 1.0).
+        # These provide no gradient signal and would produce ~1e8 spikes.
+        if std < 1e-6:
+            continue
         normalized = (values - mean) / (std + 1e-8)
         combined += weight * normalized
 
