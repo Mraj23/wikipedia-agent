@@ -1,11 +1,12 @@
 """Reward functions for RL conditions B-E.
 
 All reward functions return float in [0, 1].
+Format compliance is a binary gate (invalid → 0), not a weighted component.
 Reward composition per condition:
   B: sparse win/loss only
-  C: 0.6 * move_quality + 0.3 * terminal + 0.1 * format
-  D: 0.5 * move_quality + 0.2 * future_state_accuracy + 0.2 * terminal + 0.1 * format
-  E: 0.5 * move_quality + 0.2 * prediction_accuracy + 0.2 * terminal + 0.1 * format
+  C: 0.67 * move_quality + 0.33 * terminal
+  D: 0.56 * move_quality + 0.22 * future_state_accuracy + 0.22 * terminal
+  E: 0.56 * move_quality + 0.22 * prediction_accuracy + 0.22 * terminal
 """
 
 import re
@@ -50,7 +51,7 @@ class RewardCalculator:
         game_result: str,
         response: str,
     ) -> float:
-        """Composite reward for condition C: 0.6*move + 0.3*terminal + 0.1*format.
+        """Composite reward for condition C: 0.67*move + 0.33*terminal.
 
         Args:
             env: Game state BEFORE the move was played.
@@ -63,8 +64,7 @@ class RewardCalculator:
         """
         mq = self._move_quality(env, played_col)
         tr = self._terminal_reward(game_result)
-        fr = self._format_reward(response, "C")
-        return 0.6 * mq + 0.3 * tr + 0.1 * fr
+        return 0.67 * mq + 0.33 * tr
 
     def condition_d_reward(
         self,
@@ -73,7 +73,7 @@ class RewardCalculator:
         game_result: str,
         response: str,
     ) -> float:
-        """Composite reward for condition D: 0.5*move + 0.2*future + 0.2*terminal + 0.1*format.
+        """Composite reward for condition D: 0.56*move + 0.22*future + 0.22*terminal.
 
         Args:
             env: Game state BEFORE the move was played.
@@ -88,8 +88,7 @@ class RewardCalculator:
         mq = self._move_quality(env, played_col)
         fs = self._future_state_accuracy(env, played_col, parsed.get("future_state", ""))
         tr = self._terminal_reward(game_result)
-        fr = self._format_reward(response, "D")
-        return 0.5 * mq + 0.2 * fs + 0.2 * tr + 0.1 * fr
+        return 0.56 * mq + 0.22 * fs + 0.22 * tr
 
     def condition_e_reward(
         self,
@@ -99,7 +98,7 @@ class RewardCalculator:
         game_result: str,
         response: str,
     ) -> float:
-        """Composite reward for condition E: 0.5*move + 0.2*pred + 0.2*terminal + 0.1*format.
+        """Composite reward for condition E: 0.56*move + 0.22*pred + 0.22*terminal.
 
         Args:
             env: Game state BEFORE the move was played.
@@ -114,8 +113,7 @@ class RewardCalculator:
         mq = self._move_quality(env, played_col)
         pa = self._prediction_accuracy(env, played_col, predicted_opp_col)
         tr = self._terminal_reward(game_result)
-        fr = self._format_reward(response, "E")
-        return 0.5 * mq + 0.2 * pa + 0.2 * tr + 0.1 * fr
+        return 0.56 * mq + 0.22 * pa + 0.22 * tr
 
     def condition_g_reward(
         self,
@@ -125,7 +123,7 @@ class RewardCalculator:
         game_result: str,
         response: str,
     ) -> float:
-        """Composite reward for condition G (negative control): 0.5*move + 0.2*count + 0.2*terminal + 0.1*format.
+        """Composite reward for condition G (negative control): 0.56*move + 0.22*count + 0.22*terminal.
 
         The auxiliary task (piece count mod 7) is strategically meaningless.
         If G transfers as well as E, then any auxiliary task helps equally
@@ -144,8 +142,7 @@ class RewardCalculator:
         mq = self._move_quality(env, played_col)
         ca = self._piece_count_accuracy(env, predicted_count)
         tr = self._terminal_reward(game_result)
-        fr = self._format_reward(response, "G")
-        return 0.5 * mq + 0.2 * ca + 0.2 * tr + 0.1 * fr
+        return 0.56 * mq + 0.22 * ca + 0.22 * tr
 
     @staticmethod
     def _piece_count_accuracy(env: ConnectFourEnv, predicted_count: int) -> float:
