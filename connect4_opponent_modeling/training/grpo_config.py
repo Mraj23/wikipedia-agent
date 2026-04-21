@@ -33,7 +33,7 @@ class GRPOConfig:
     clip_ratio: float = 0.2
     kl_coef: float = 0.001
     lr: float = 1e-6
-    max_tokens: int = 512
+    max_tokens: int = 256
     eval_every: int = 1000
     opponent_depth: int = 6
     use_rae: bool = True

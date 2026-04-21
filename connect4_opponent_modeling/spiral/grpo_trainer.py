@@ -107,20 +107,17 @@ class GRPOTrainer:
         else:
             self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=config.lr)
 
-        # vLLM engine for fast generation (GPU only)
-        self._vllm_engine = None
+        # vLLM generator for fast generation (GPU only).
+        # Uses CPU offloading: training model goes to CPU during generation,
+        # vLLM gets full GPU. After generation, vLLM is destroyed and
+        # training model moves back to GPU.
+        self._vllm_gen = None
         if config.use_vllm and self.device.type == "cuda":
             try:
-                from vllm import LLM, SamplingParams
-                logger.info("Initializing vLLM engine for fast generation...")
+                from spiral.vllm_generator import VLLMGenerator
                 vllm_dtype = "bfloat16" if self.dtype == torch.bfloat16 else "float16"
-                self._vllm_engine = LLM(
-                    model=config.model_path,
-                    dtype=vllm_dtype,
-                    gpu_memory_utilization=0.4,  # Share GPU with training model
-                    enforce_eager=True,  # Avoid CUDA graph issues with weight updates
-                )
-                logger.info("vLLM engine ready.")
+                self._vllm_gen = VLLMGenerator(config.model_path, dtype=vllm_dtype)
+                logger.info("vLLM generator initialized (CPU offload mode).")
             except ImportError:
                 logger.warning("vLLM not installed. Using HF generate() (slower).")
             except Exception as e:
@@ -342,37 +339,56 @@ class GRPOTrainer:
         Returns:
             Tuple of (decoded_texts, per_completion_log_probs).
         """
-        if self._vllm_engine is not None:
+        if self._vllm_gen is not None:
             return self._generate_group_vllm(prompt)
         return self._generate_group_hf(prompt)
 
     def _generate_group_vllm(
         self, prompt: str
     ) -> Tuple[List[str], List[torch.Tensor]]:
-        """Generate completions using vLLM engine."""
-        from vllm import SamplingParams
+        """Generate completions using vLLM with CPU offloading.
 
-        params = SamplingParams(
+        Flow:
+        1. Move training model + ref model to CPU
+        2. vLLM generates on GPU (full memory)
+        3. Destroy vLLM engine
+        4. Move models back to GPU
+        5. Compute log-probs under training model
+        """
+        import time
+        gen_start = time.time()
+
+        # 1. Offload training and ref models to CPU to free GPU for vLLM
+        self.model.to("cpu")
+        self.ref_model.to("cpu")
+        torch.cuda.empty_cache()
+
+        # 2. Generate with vLLM (full GPU)
+        completions = self._vllm_gen.generate(
+            prompt=prompt,
             n=self.config.group_size,
             max_tokens=self.config.max_tokens,
             min_tokens=10,
             temperature=0.7,
         )
-        outputs = self._vllm_engine.generate([prompt], params)
-        request_output = outputs[0]
 
-        completions = []
+        # 3. Destroy vLLM to free GPU
+        self._vllm_gen._destroy_engine()
+
+        # 4. Move models back to GPU
+        self.model.to(self.device)
+        self.ref_model.to(self.device)
+
+        gen_time = time.time() - gen_start
+        logger.debug("vLLM generation: %d completions in %.1fs", len(completions), gen_time)
+
+        # 5. Compute log-probs under training model (on GPU)
         log_probs_list = []
-
         prompt_ids = self.tokenizer(
             prompt, return_tensors="pt", truncation=True, max_length=512
         )["input_ids"][0].to(self.device)
 
-        for completion_output in request_output.outputs:
-            text = completion_output.text
-            completions.append(text)
-
-            # Compute log-probs under the training model (needed for GRPO loss)
+        for text in completions:
             gen_ids = self.tokenizer(
                 text, return_tensors="pt", add_special_tokens=False
             )["input_ids"][0].to(self.device)
@@ -436,31 +452,10 @@ class GRPOTrainer:
         return completions, log_probs_list
 
     def _sync_vllm_weights(self) -> None:
-        """Sync training model weights to vLLM engine after optimizer step."""
-        if self._vllm_engine is None:
+        """Save updated weights so vLLM loads them on next generation."""
+        if self._vllm_gen is None:
             return
-        # Extract state dict from training model and load into vLLM
-        try:
-            from vllm.worker.model_runner import ModelRunner
-            state_dict = self.model.state_dict()
-            llm_model = self._vllm_engine.llm_engine.model_executor.driver_worker.model_runner.model
-            llm_model.load_weights(state_dict.items())
-            logger.debug("vLLM weights synced.")
-        except Exception as e:
-            logger.warning("vLLM weight sync failed: %s. Regenerating engine.", e)
-            # Fallback: save model to temp dir and reload vLLM
-            import tempfile
-            with tempfile.TemporaryDirectory() as tmpdir:
-                self.model.save_pretrained(tmpdir)
-                self.tokenizer.save_pretrained(tmpdir)
-                from vllm import LLM
-                vllm_dtype = "bfloat16" if self.dtype == torch.bfloat16 else "float16"
-                self._vllm_engine = LLM(
-                    model=tmpdir,
-                    dtype=vllm_dtype,
-                    gpu_memory_utilization=0.4,
-                    enforce_eager=True,
-                )
+        self._vllm_gen.update_weights(self.model, self.tokenizer, self._step)
 
     def _compute_log_probs(
         self, prompt_ids: torch.Tensor, gen_ids: torch.Tensor
