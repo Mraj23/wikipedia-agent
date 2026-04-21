@@ -162,20 +162,19 @@ def test_component_weight_consistency():
             # Compute components manually (same as grpo_trainer._compute_single_reward)
             move_quality = solver.normalize_reward(env, col)
             terminal = RewardCalculator._terminal_reward(game_result)
-            format_r = RewardCalculator._format_reward(response, condition)
 
             if condition == "C":
-                recomputed = 0.6 * move_quality + 0.3 * terminal + 0.1 * format_r
+                recomputed = 0.67 * move_quality + 0.33 * terminal
             elif condition == "D":
                 parsed_d = parse_response(response, "D")
                 fs = calc._future_state_accuracy(env, col, parsed_d.get("future_state", ""))
-                recomputed = 0.5 * move_quality + 0.2 * fs + 0.2 * terminal + 0.1 * format_r
+                recomputed = 0.56 * move_quality + 0.22 * fs + 0.22 * terminal
             elif condition == "E":
                 pred_acc = calc._prediction_accuracy(env, col, pred)
-                recomputed = 0.5 * move_quality + 0.2 * pred_acc + 0.2 * terminal + 0.1 * format_r
+                recomputed = 0.56 * move_quality + 0.22 * pred_acc + 0.22 * terminal
             elif condition == "G":
                 count_acc = RewardCalculator._piece_count_accuracy(env, count)
-                recomputed = 0.5 * move_quality + 0.2 * count_acc + 0.2 * terminal + 0.1 * format_r
+                recomputed = 0.56 * move_quality + 0.22 * count_acc + 0.22 * terminal
 
             diff = abs(total - recomputed)
             max_diff = max(max_diff, diff)
