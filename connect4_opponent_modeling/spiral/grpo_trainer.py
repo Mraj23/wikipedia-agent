@@ -82,9 +82,12 @@ class GRPOTrainer:
             config.model_path, trust_remote_code=True, dtype=self.dtype
         ).to(self.device)
 
-        # No gradient checkpointing — it disables KV cache, making generation
-        # ~256x slower. With 8-bit AdamW, the model fits in 80GB without it:
-        # model (8GB) + ref (8GB) + optimizer (8GB) + grads (8GB) + acts (~15GB) = ~47GB
+        # Enable gradient checkpointing to reduce activation memory during backward.
+        # This sets use_cache=False on the model config, but we override it
+        # during generation by calling model.generate(use_cache=True).
+        if self.device.type == "cuda":
+            self.model.gradient_checkpointing_enable()
+            logger.info("Gradient checkpointing enabled (for backward pass only).")
 
         # Frozen reference model for KL computation
         self.ref_model = deepcopy(self.model)
@@ -386,6 +389,13 @@ class GRPOTrainer:
     ) -> Tuple[List[str], List[torch.Tensor]]:
         """Generate completions using HuggingFace model.generate()."""
         self.model.eval()
+
+        # Disable gradient checkpointing for generation so KV cache works.
+        # Re-enable after generation for the backward pass.
+        if hasattr(self.model, "gradient_checkpointing_disable"):
+            self.model.gradient_checkpointing_disable()
+            self.model.config.use_cache = True
+
         inputs = self.tokenizer(
             prompt, return_tensors="pt", truncation=True, max_length=512
         ).to(self.device)
@@ -417,6 +427,10 @@ class GRPOTrainer:
                 log_probs_list.append(lp)
 
             remaining -= batch
+
+        # Re-enable gradient checkpointing for backward pass
+        if self.device.type == "cuda" and hasattr(self.model, "gradient_checkpointing_enable"):
+            self.model.gradient_checkpointing_enable()
 
         self.model.train()
         return completions, log_probs_list
