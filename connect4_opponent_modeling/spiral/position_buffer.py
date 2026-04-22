@@ -1,13 +1,14 @@
 """Position buffer for sampling diverse board states during RL training.
 
-Generates positions via minimax-vs-minimax self-play (same approach as
-sft_data_gen.py) but without labels — RL discovers the policy.
+Generates positions via minimax-vs-minimax self-play with column-balanced
+stratification to prevent the model from exploiting a single dominant column.
 """
 
 import random
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from env.connect_four_env import ConnectFourEnv
+from env.pons_wrapper import PonsSolver
 from training.minimax import MinimaxSolver
 
 
@@ -52,6 +53,7 @@ class PositionBuffer:
         self._pool: List[str] = []  # move sequence strings
         self._rng = random.Random(seed)
         self._min_moves_remaining = min_moves_remaining
+        self._solver = PonsSolver(fallback_depth=4)
         self._fill(pool_size)
 
     def _fill(self, n: int) -> None:
@@ -63,8 +65,10 @@ class PositionBuffer:
         import time
         import sys
 
-        # Track phase distribution for stratified coverage
-        phase_counts = {"beginning": 0, "middle": 0, "end": 0}
+        # Track distributions for balanced coverage
+        phase_counts: Dict[str, int] = {"beginning": 0, "middle": 0, "end": 0}
+        col_counts: Dict[int, int] = {c: 0 for c in range(7)}
+        target_per_col = n // 7 + 1
         target_per_phase = n // 3
         games_played = 0
         start_time = time.time()
@@ -88,9 +92,9 @@ class PositionBuffer:
                     move_seq = env.to_move_sequence()
                     snapshots.append((move_seq, phase))
 
-                # Play the move
+                # Play the move — 40% random for more diverse positions
                 current_solver = solver1 if env.current_player() == 1 else solver2
-                if self._rng.random() < 0.2:
+                if self._rng.random() < 0.4:
                     move = self._rng.choice(env.legal_moves())
                 else:
                     move = current_solver.best_move(env)
@@ -98,7 +102,7 @@ class PositionBuffer:
 
             games_played += 1
 
-            # Filter and add positions
+            # Filter and add positions with column balancing
             for move_seq, phase in snapshots:
                 if len(self._pool) >= n:
                     break
@@ -116,6 +120,14 @@ class PositionBuffer:
                 if remaining < self._min_moves_remaining:
                     continue
 
+                # Column balancing: check optimal column and skip if over-represented
+                scores = self._solver.analyze(test_env)
+                if scores:
+                    best_col = max(scores, key=scores.get)
+                    if col_counts[best_col] >= target_per_col:
+                        continue  # This column is over-represented
+                    col_counts[best_col] += 1
+
                 self._pool.append(move_seq)
                 phase_counts[phase] = phase_counts.get(phase, 0) + 1
 
@@ -131,10 +143,9 @@ class PositionBuffer:
                     f"{games_played} games | "
                     f"{elapsed:.0f}s elapsed | "
                     f"~{eta:.0f}s remaining | "
-                    f"phases: {dict(phase_counts)}",
+                    f"cols: {dict(col_counts)}",
                     flush=True,
                 )
-                last_log = current
 
     def _estimate_remaining(self, env: ConnectFourEnv) -> int:
         """Estimate moves remaining via quick minimax playout.

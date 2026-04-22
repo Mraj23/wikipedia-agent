@@ -177,6 +177,9 @@ class GRPOTrainer:
         elif config.use_wandb and not _WANDB_AVAILABLE:
             logger.warning("use_wandb=True but wandb not installed. pip install wandb")
 
+        # Dynamic temperature — increases when move diversity collapses
+        self._temperature = 0.7
+
     def train(self) -> None:
         """Run the full GRPO training loop."""
         logger.info(
@@ -208,6 +211,32 @@ class GRPOTrainer:
                 env, completions
             )
 
+            # 4b. Move diversity monitoring
+            from collections import Counter
+            moves_played = []
+            for resp in completions:
+                parsed = parse_response("<think>" + resp, self.config.condition)
+                moves_played.append(parsed.get("move"))
+            valid_moves = [m for m in moves_played if m is not None]
+            move_counts = Counter(valid_moves)
+            unique_moves = len(move_counts)
+            if move_counts:
+                most_common_col, most_common_count = move_counts.most_common(1)[0]
+                most_common_pct = most_common_count / max(len(completions), 1)
+            else:
+                most_common_col, most_common_pct = -1, 0.0
+
+            # Collapse detection: if >80% play the same column, increase temperature
+            if most_common_pct > 0.8:
+                self._temperature = min(1.5, self._temperature + 0.1)
+                logger.warning(
+                    "Step %d: Move collapse — %d/%d play col %d. Temp -> %.2f",
+                    step, most_common_count, len(completions),
+                    most_common_col, self._temperature,
+                )
+            else:
+                self._temperature = max(0.7, self._temperature - 0.02)
+
             # 5. Compute advantages
             advantages = compute_advantages(
                 rewards=rewards,
@@ -224,7 +253,7 @@ class GRPOTrainer:
 
             step_time = time.time() - step_start
 
-            # 7. Logging
+            # 8. Logging
             log_entry = {
                 "step": step,
                 "loss": loss,
@@ -232,6 +261,10 @@ class GRPOTrainer:
                 "mean_reward": sum(rewards) / len(rewards),
                 "max_reward": max(rewards),
                 "min_reward": min(rewards),
+                "unique_moves": unique_moves,
+                "most_common_move": most_common_col,
+                "most_common_pct": most_common_pct,
+                "temperature": self._temperature,
                 "step_time_s": step_time,
             }
             self._train_log.append(log_entry)
@@ -239,11 +272,17 @@ class GRPOTrainer:
             log_every = 100 if self.config.game_steps > 100 else 1
             if step % log_every == 0:
                 logger.info(
-                    "Step %d/%d: loss=%.4f kl=%.4f reward=%.3f [%.3f, %.3f] (%.1fs)",
+                    "Step %d/%d: loss=%.4f kl=%.4f reward=%.3f [%.3f, %.3f] "
+                    "moves=%d/%d temp=%.2f (%.1fs)",
                     step, self.config.game_steps, loss, kl,
                     log_entry["mean_reward"], log_entry["min_reward"],
-                    log_entry["max_reward"], step_time,
+                    log_entry["max_reward"], unique_moves, len(completions),
+                    self._temperature, step_time,
                 )
+
+            # Log sample completion every 50 steps
+            if step % 50 == 0 and completions:
+                logger.info("Step %d sample: %s", step, completions[0][:200])
 
             # W&B per-step logging
             if self._wandb_run is not None:
@@ -254,6 +293,9 @@ class GRPOTrainer:
                     "train/reward_max": log_entry["max_reward"],
                     "train/reward_min": log_entry["min_reward"],
                     "train/step_time_s": step_time,
+                    "train/unique_moves": unique_moves,
+                    "train/most_common_pct": most_common_pct,
+                    "train/temperature": self._temperature,
                 }
                 # Log per-component reward means across the group
                 if reward_components and reward_components[0]:
@@ -356,7 +398,7 @@ class GRPOTrainer:
             n=self.config.group_size,
             max_tokens=self.config.max_tokens,
             min_tokens=10,
-            temperature=0.7,
+            temperature=self._temperature,
         )
         outputs = self._vllm_engine.generate([prompt], params)
         request_output = outputs[0]
@@ -415,7 +457,7 @@ class GRPOTrainer:
                     min_new_tokens=10,
                     num_return_sequences=batch,
                     do_sample=True,
-                    temperature=0.7,
+                    temperature=self._temperature,
                     pad_token_id=self.tokenizer.pad_token_id,
                 )
 
@@ -719,8 +761,19 @@ class GRPOTrainer:
             kl = (current_token_lp - ref_token_lp).mean()
             total_kl += kl.item()
 
-            # Loss = -surrogate + kl_coef * kl
-            completion_loss = -surrogate + self.config.kl_coef * kl
+            # Entropy bonus — prevents mode collapse by rewarding diverse outputs.
+            # When all completions converge to the same tokens, entropy drops
+            # and this term provides gradient to push toward more diversity.
+            probs = torch.exp(current_log_probs[:min_len])
+            token_entropy = -torch.sum(probs * current_log_probs[:min_len], dim=-1)
+            entropy = token_entropy.mean()
+
+            # Loss = -surrogate + kl_coef * kl - entropy_coef * entropy
+            completion_loss = (
+                -surrogate
+                + self.config.kl_coef * kl
+                - self.config.entropy_coef * entropy
+            )
             total_loss = total_loss + completion_loss
             n_valid += 1
 
