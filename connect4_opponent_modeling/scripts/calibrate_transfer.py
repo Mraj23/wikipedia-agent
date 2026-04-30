@@ -102,17 +102,18 @@ def parse_model_move(response, game_name, legal_actions, state):
 
     # 3. TicTacToe: add missing player prefix (e.g., "(0,1)" -> "x(0,1)")
     if game_name == "tic_tac_toe":
-        # Try adding current player prefix
-        player = "x" if state.current_player() == 0 else "o"
-        for action_str, action in action_map.items():
-            if player + clean == action_str or player + search_text.strip() == action_str:
-                return action
+        # Try both x and o prefix since state may have advanced
+        for player in ["x", "o"]:
+            prefixed = player + clean
+            if prefixed in action_map:
+                return action_map[prefixed]
         # Try matching coordinates anywhere
         coord_match = re.search(r"\((\d),\s*(\d)\)", search_text)
         if coord_match:
-            target = f"{player}({coord_match.group(1)},{coord_match.group(2)})"
-            if target in action_map:
-                return action_map[target]
+            for player in ["x", "o"]:
+                target = f"{player}({coord_match.group(1)},{coord_match.group(2)})"
+                if target in action_map:
+                    return action_map[target]
 
     # 4. Connect Four: bare column numbers
     if game_name == "connect_four":
@@ -139,6 +140,13 @@ def parse_model_move(response, game_name, legal_actions, state):
                 return action_map[move]
             if move + "*" in action_map:
                 return action_map[move + "*"]
+
+    # 7. Last resort: search the FULL response for any legal action string
+    if answer_match:
+        # We only searched inside <answer> tag — try full response
+        for action_str in sorted(action_map.keys(), key=len, reverse=True):
+            if action_str in response:
+                return action_map[action_str]
 
     return None
 
