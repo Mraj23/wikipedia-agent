@@ -34,7 +34,7 @@ class GRPOConfig:
     kl_coef: float = 0.001
     entropy_coef: float = 0.01
     lr: float = 1e-6
-    max_tokens: int = 512
+    max_tokens: int = 256
     eval_every: int = 1000
     opponent_depth: int = 6
     use_rae: bool = True
