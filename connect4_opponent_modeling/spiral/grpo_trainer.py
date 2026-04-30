@@ -77,6 +77,7 @@ class GRPOTrainer:
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
+        self._has_chat_template = hasattr(self.tokenizer, "apply_chat_template")
 
         self.model = AutoModelForCausalLM.from_pretrained(
             config.model_path, trust_remote_code=True, dtype=self.dtype
@@ -208,15 +209,32 @@ class GRPOTrainer:
                 env, completions
             )
 
-            # 4b. Move diversity monitoring
+            # 4b. Move diversity + validity + thinking length monitoring
             from collections import Counter
+            import re as _re
             moves_played = []
+            thinking_token_counts = []
+            valid_count = 0
             for resp in completions:
                 parsed = parse_response(resp, self.config.condition)
-                moves_played.append(parsed.get("move"))
+                move = parsed.get("move")
+                moves_played.append(move)
+                if move is not None:
+                    valid_count += 1
+                # Count tokens before <answer> (approximate thinking length)
+                answer_pos = resp.find("<answer>")
+                if answer_pos > 0:
+                    thinking_text = resp[:answer_pos]
+                    thinking_tokens = len(self.tokenizer.encode(thinking_text))
+                    thinking_token_counts.append(thinking_tokens)
+                elif len(resp) > 0:
+                    # No answer tag — all tokens were thinking (truncated)
+                    thinking_token_counts.append(self.config.max_tokens)
             valid_moves = [m for m in moves_played if m is not None]
             move_counts = Counter(valid_moves)
             unique_moves = len(move_counts)
+            valid_pct = valid_count / max(len(completions), 1)
+            avg_thinking_tokens = sum(thinking_token_counts) / max(len(thinking_token_counts), 1)
             if move_counts:
                 most_common_col, most_common_count = move_counts.most_common(1)[0]
                 most_common_pct = most_common_count / max(len(completions), 1)
@@ -261,6 +279,9 @@ class GRPOTrainer:
                 "unique_moves": unique_moves,
                 "most_common_move": most_common_col,
                 "most_common_pct": most_common_pct,
+                "valid_completions": valid_count,
+                "valid_pct": valid_pct,
+                "avg_thinking_tokens": avg_thinking_tokens,
                 "temperature": self._temperature,
                 "step_time_s": step_time,
             }
@@ -270,16 +291,23 @@ class GRPOTrainer:
             if step % log_every == 0:
                 logger.info(
                     "Step %d/%d: loss=%.4f kl=%.4f reward=%.3f [%.3f, %.3f] "
-                    "moves=%d/%d temp=%.2f (%.1fs)",
+                    "valid=%d/%d (%d%%) think=%.0f moves=%d temp=%.2f (%.1fs)",
                     step, self.config.game_steps, loss, kl,
                     log_entry["mean_reward"], log_entry["min_reward"],
-                    log_entry["max_reward"], unique_moves, len(completions),
+                    log_entry["max_reward"], valid_count, len(completions),
+                    valid_pct * 100, avg_thinking_tokens, unique_moves,
                     self._temperature, step_time,
                 )
 
-            # Log sample completion every 50 steps
-            if step % 50 == 0 and completions:
-                logger.info("Step %d sample: %s", step, completions[0][:200])
+            # Log sample completion every step (truncated)
+            if completions:
+                # Find a valid completion to show
+                sample = completions[0][:300]
+                for resp in completions:
+                    if "<answer>" in resp:
+                        sample = resp[:300]
+                        break
+                logger.info("Step %d sample: %s", step, sample)
 
             # W&B per-step logging
             if self._wandb_run is not None:
@@ -292,6 +320,9 @@ class GRPOTrainer:
                     "train/step_time_s": step_time,
                     "train/unique_moves": unique_moves,
                     "train/most_common_pct": most_common_pct,
+                    "train/valid_completions": valid_count,
+                    "train/valid_pct": valid_pct,
+                    "train/avg_thinking_tokens": avg_thinking_tokens,
                     "train/temperature": self._temperature,
                 }
                 # Log per-component reward means across the group
@@ -367,6 +398,19 @@ class GRPOTrainer:
             artifact.add_file(str(self.log_dir / "train_log.json"))
             self._wandb_run.log_artifact(artifact)
             self._wandb_run.finish()
+
+
+    def _apply_chat_template(self, prompt: str) -> str:
+        """Apply chat template so /no_think is processed correctly."""
+        if self._has_chat_template:
+            try:
+                messages = [{"role": "user", "content": prompt}]
+                return self.tokenizer.apply_chat_template(
+                    messages, tokenize=False, add_generation_prompt=True
+                )
+            except Exception:
+                pass
+        return prompt
 
     def _generate_group(
         self, prompt: str
@@ -454,8 +498,9 @@ class GRPOTrainer:
             self.model.gradient_checkpointing_disable()
             self.model.config.use_cache = True
 
+        chat_prompt = self._apply_chat_template(prompt)
         inputs = self.tokenizer(
-            prompt, return_tensors="pt", truncation=True, max_length=512
+            chat_prompt, return_tensors="pt", truncation=True, max_length=1024
         ).to(self.device)
         prompt_len = inputs["input_ids"].shape[1]
 
@@ -699,8 +744,9 @@ class GRPOTrainer:
             Tuple of (loss_value, mean_kl).
         """
         self.model.train()
+        chat_prompt = self._apply_chat_template(prompt)
         prompt_ids = self.tokenizer(
-            prompt, return_tensors="pt", truncation=True, max_length=512
+            chat_prompt, return_tensors="pt", truncation=True, max_length=1024
         )["input_ids"][0].to(self.device)
 
         total_loss = torch.tensor(0.0, device=self.device, requires_grad=True)
