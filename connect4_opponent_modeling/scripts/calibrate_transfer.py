@@ -102,15 +102,19 @@ def parse_model_move(response, game_name, legal_actions, state):
 
     # 3. TicTacToe: add missing player prefix (e.g., "(0,1)" -> "x(0,1)")
     if game_name == "tic_tac_toe":
-        # Try both x and o prefix since state may have advanced
-        for player in ["x", "o"]:
+        # Infer correct player prefix from legal actions (e.g., "x(0,0)" -> "x")
+        player = None
+        for a_str in action_map:
+            if a_str and a_str[0] in ("x", "o"):
+                player = a_str[0]
+                break
+        if player:
             prefixed = player + clean
             if prefixed in action_map:
                 return action_map[prefixed]
-        # Try matching coordinates anywhere
-        coord_match = re.search(r"\((\d),\s*(\d)\)", search_text)
-        if coord_match:
-            for player in ["x", "o"]:
+            # Try matching coordinates anywhere
+            coord_match = re.search(r"\((\d),\s*(\d)\)", search_text)
+            if coord_match:
                 target = f"{player}({coord_match.group(1)},{coord_match.group(2)})"
                 if target in action_map:
                     return action_map[target]
