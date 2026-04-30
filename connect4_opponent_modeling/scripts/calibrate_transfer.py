@@ -72,28 +72,73 @@ Respond in this exact format:
 
 
 def parse_model_move(response, game_name, legal_actions, state):
-    """Parse move from model response. Checks <answer> tag first, then full response."""
-    # Try <answer> tag first
+    """Parse move from model response. Lenient matching for common format issues."""
+    # Try <answer> tag first, fall back to full response
     answer_match = re.search(r"<answer>(.*?)</answer>", response, re.DOTALL)
     search_text = answer_match.group(1).strip() if answer_match else response
 
-    # Match against legal action strings
+    # Build action map
     action_map = {}
     for action in legal_actions:
         action_str = state.action_to_string(state.current_player(), action)
         action_map[action_str] = action
 
-    # Try exact matches (longest first)
+    # 1. Try exact match (longest first)
     for action_str in sorted(action_map.keys(), key=len, reverse=True):
         if action_str in search_text:
             return action_map[action_str]
 
-    # Fallback for connect_four: bare column numbers
+    # 2. Lenient matching: strip trailing punctuation, add missing prefixes
+    clean = search_text.strip().rstrip(";").rstrip("*")
+
+    for action_str, action in action_map.items():
+        clean_action = action_str.rstrip(";").rstrip("*")
+        # Match without capture asterisk (e.g., "d3c2" matches "d3c2*")
+        if clean == clean_action:
+            return action
+        # Match with missing semicolon for Nim (e.g., "pile:4, take:2" matches "pile:4, take:2;")
+        if clean == action_str.rstrip(";"):
+            return action
+
+    # 3. TicTacToe: add missing player prefix (e.g., "(0,1)" -> "x(0,1)")
+    if game_name == "tic_tac_toe":
+        # Try adding current player prefix
+        player = "x" if state.current_player() == 0 else "o"
+        for action_str, action in action_map.items():
+            if player + clean == action_str or player + search_text.strip() == action_str:
+                return action
+        # Try matching coordinates anywhere
+        coord_match = re.search(r"\((\d),\s*(\d)\)", search_text)
+        if coord_match:
+            target = f"{player}({coord_match.group(1)},{coord_match.group(2)})"
+            if target in action_map:
+                return action_map[target]
+
+    # 4. Connect Four: bare column numbers
     if game_name == "connect_four":
         digits = re.findall(r"\b([0-6])\b", search_text)
         for d in digits:
             if int(d) in legal_actions:
                 return int(d)
+
+    # 5. Nim: flexible pile/take parsing
+    if game_name == "nim":
+        nim_match = re.search(r"pile[:\s]*(\d+)[,\s]*take[:\s]*(\d+)", search_text, re.IGNORECASE)
+        if nim_match:
+            target = f"pile:{nim_match.group(1)}, take:{nim_match.group(2)};"
+            if target in action_map:
+                return action_map[target]
+
+    # 6. Breakthrough: match without asterisk, model might omit capture marker
+    if game_name == "breakthrough":
+        bt_match = re.search(r"([a-f]\d[a-f]\d)", search_text)
+        if bt_match:
+            move = bt_match.group(1)
+            # Try with and without capture asterisk
+            if move in action_map:
+                return action_map[move]
+            if move + "*" in action_map:
+                return action_map[move + "*"]
 
     return None
 
