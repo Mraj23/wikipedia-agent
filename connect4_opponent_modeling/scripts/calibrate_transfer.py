@@ -21,35 +21,12 @@ import numpy as np
 
 
 # Game-specific prompts and move parsing (from GTBench format)
-GAME_PROMPTS = {
-    "breakthrough": {
-        "system": "You are playing Breakthrough, a two-player board game on a 6x6 grid. "
-                  "Each player starts with two rows of pieces. Pieces move forward one square "
-                  "diagonally or straight. You capture by moving diagonally into an opponent's piece. "
-                  "The first player to reach the opponent's home row wins.",
-        "move_format": "Your move as <start->end>, e.g., <a2->a3> or <b2->c3>",
-        "regex": r"([a-f][1-6]->[a-f][1-6])",
-    },
-    "nim": {
-        "system": "You are playing Nim. There are 4 piles with 1, 3, 5, and 7 objects. "
-                  "Players take turns removing any number of objects from a single pile. "
-                  "The player who takes the last object wins.",
-        "move_format": "Your move as <pile:X, take:Y>, e.g., <pile:1, take:1>",
-        "regex": r"pile:(\d+),\s*take:(\d+)",
-    },
-    "connect_four": {
-        "system": "You are playing Connect Four on a 7-column, 6-row board. "
-                  "Players take turns dropping pieces into columns (0-6). "
-                  "The first player to get 4 in a row (horizontal, vertical, or diagonal) wins.",
-        "move_format": "Your move as a column number 0-6",
-        "regex": r"\b([0-6])\b",
-    },
-    "tic_tac_toe": {
-        "system": "You are playing Tic-Tac-Toe on a 3x3 grid. "
-                  "Players take turns marking a space. Get 3 in a row to win.",
-        "move_format": "Your move as <CxRy>, e.g., <C1R1>",
-        "regex": r"C(\d)R(\d)",
-    },
+GAME_DESCRIPTIONS = {
+    "breakthrough": "Breakthrough on a 6x6 grid. Move pieces forward (straight or diagonal). "
+                    "Capture diagonally. First to reach opponent's home row wins.",
+    "nim": "Nim. Remove objects from one pile per turn. Take the last object to win.",
+    "connect_four": "Connect Four. Drop a piece into a column (0-6). First to get 4 in a row wins.",
+    "tic_tac_toe": "Tic-Tac-Toe on a 3x3 grid. Get 3 in a row to win.",
 }
 
 OPENSPIEL_NAMES = {
@@ -71,75 +48,55 @@ def action_to_text(state, action, game_name):
 
 
 def parse_model_move(response, game_name, legal_actions, state):
-    """Parse the model's response into an OpenSpiel action."""
-    config = GAME_PROMPTS[game_name]
-    matches = re.findall(config["regex"], response)
-    if not matches:
-        return None
+    """Parse the model's response by matching against legal action strings.
 
-    move_str = matches[-1]  # take last match
-    if isinstance(move_str, tuple):
-        move_str = ",".join(move_str)
+    Looks for any legal action string appearing in the response.
+    Prioritizes matches found later in the response (after thinking).
+    """
+    # Strip thinking tags
+    if "</think>" in response:
+        response = response.split("</think>")[-1]
 
-    # Try to match against legal action strings
+    # Build map of action string -> action
+    action_map = {}
     for action in legal_actions:
         action_str = state.action_to_string(state.current_player(), action)
-        # Flexible matching
-        if game_name == "nim":
-            # Parse pile:X, take:Y
-            parts = move_str.split(",")
-            if len(parts) == 2:
-                try:
-                    pile = int(parts[0].strip())
-                    take = int(parts[1].strip())
-                    if f"pile:{pile}" in action_str and f"take:{take}" in action_str:
-                        return action
-                except ValueError:
-                    pass
-        elif game_name == "connect_four":
-            try:
-                col = int(move_str)  # 0-indexed, matching OpenSpiel
-                if action == col:
-                    return action
-            except ValueError:
-                pass
-        elif game_name == "breakthrough":
-            # Model outputs "a2->a3", OpenSpiel uses "a2a3" (no arrow)
-            clean_move = move_str.replace("->", "").replace(" ", "")
-            clean_action = action_str.replace(" ", "")
-            if clean_move == clean_action:
-                return action
-        elif game_name == "tic_tac_toe":
-            parts = move_str.split(",") if "," in move_str else [move_str[:1], move_str[1:]]
-            if len(parts) == 2:
-                # Try matching
-                if action_str and move_str in action_str:
-                    return action
+        action_map[action_str] = action
+
+    # Look for exact matches of legal action strings in the response
+    # Try longest matches first to avoid partial matches
+    sorted_strs = sorted(action_map.keys(), key=len, reverse=True)
+    for action_str in sorted_strs:
+        if action_str in response:
+            return action_map[action_str]
+
+    # Fallback for connect_four: match bare column numbers
+    if game_name == "connect_four":
+        digits = re.findall(r"\b([0-6])\b", response)
+        for d in digits:
+            if int(d) in legal_actions:
+                return int(d)
 
     return None
 
 
 def make_prompt(state, game_name, legal_actions):
-    """Create a prompt for the model."""
-    config = GAME_PROMPTS[game_name]
+    """Create a prompt for the model.
+
+    Uses OpenSpiel's native action strings so the model can copy them directly.
+    """
+    desc = GAME_DESCRIPTIONS.get(game_name, f"You are playing {game_name}.")
     board = board_to_text(state, game_name)
     legal_strs = [state.action_to_string(state.current_player(), a) for a in legal_actions]
 
-    # For breakthrough, convert "a5a4" to "a5->a4" for readability
-    if game_name == "breakthrough":
-        display_strs = [s[:2] + "->" + s[2:] for s in legal_strs]
-    else:
-        display_strs = legal_strs
+    prompt = f"""{desc}
 
-    prompt = f"""{config['system']}
-
-Current board state:
+Board:
 {board}
 
-Legal moves: {', '.join(display_strs)}
+Legal moves: {', '.join(legal_strs)}
 
-Choose one legal move. {config['move_format']}
-Respond with ONLY your move, no explanation.
+Pick one move from the list above. Copy it exactly.
 /no_think"""
 
     return prompt
