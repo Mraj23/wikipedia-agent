@@ -39,10 +39,10 @@ GAME_PROMPTS = {
     },
     "connect_four": {
         "system": "You are playing Connect Four on a 7-column, 6-row board. "
-                  "Players take turns dropping pieces into columns. "
+                  "Players take turns dropping pieces into columns (0-6). "
                   "The first player to get 4 in a row (horizontal, vertical, or diagonal) wins.",
-        "move_format": "Your move as a column number <C1> through <C7>",
-        "regex": r"C(\d)",
+        "move_format": "Your move as a column number 0-6",
+        "regex": r"\b([0-6])\b",
     },
     "tic_tac_toe": {
         "system": "You are playing Tic-Tac-Toe on a 3x3 grid. "
@@ -98,8 +98,8 @@ def parse_model_move(response, game_name, legal_actions, state):
                     pass
         elif game_name == "connect_four":
             try:
-                col = int(move_str) - 1  # GTBench uses 1-indexed
-                if str(col) in action_str or action_str.strip() == str(col):
+                col = int(move_str)  # 0-indexed, matching OpenSpiel
+                if action == col:
                     return action
             except ValueError:
                 pass
@@ -139,7 +139,8 @@ Current board state:
 Legal moves: {', '.join(display_strs)}
 
 Choose one legal move. {config['move_format']}
-Respond with ONLY your move, no explanation."""
+Respond with ONLY your move, no explanation.
+/no_think"""
 
     return prompt
 
@@ -292,7 +293,7 @@ def main():
         inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=2048).to(device)
         with torch.no_grad():
             out = model.generate(
-                **inputs, max_new_tokens=1024, do_sample=True,
+                **inputs, max_new_tokens=128, do_sample=True,
                 temperature=0.3, pad_token_id=tokenizer.pad_token_id
             )
         return tokenizer.decode(out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
