@@ -292,7 +292,7 @@ def main():
         inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=2048).to(device)
         with torch.no_grad():
             out = model.generate(
-                **inputs, max_new_tokens=128, do_sample=True,
+                **inputs, max_new_tokens=1024, do_sample=True,
                 temperature=0.3, pad_token_id=tokenizer.pad_token_id
             )
         return tokenizer.decode(out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
