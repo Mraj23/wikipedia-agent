@@ -5,10 +5,11 @@
 **Hardware:** Lambda Labs A100-SXM4-40GB
 **Format:** `/no_think` + `<reasoning>/<answer>` tags
 **Games per level:** 10 (alternating first/second player)
+**Detailed logs:** `results/calibration_v4/` (JSON with per-move model responses)
 
 ---
 
-## 1. Difficulty Ladder Results
+## 1. Final Difficulty Ladder Results
 
 ### Connect Four
 
@@ -44,11 +45,11 @@
 
 | Opponent | Win Rate | Valid Moves |
 |---|---|---|
-| Random | 40% (4/10) | 81% |
-| Minimax-1 | 20% (2/10) | 59% |
-| Minimax-2 | 0% (0/10) | 52% |
-| Minimax-4 | 0% (0/10) | 55% |
-| MCTS-100 | 10% (1/10) | 62% |
+| Random | 40% (4/10) | 90% |
+| Minimax-1 | 20% (2/10) | 63% |
+| Minimax-2 | 0% (0/10) | 59% |
+| Minimax-4 | 0% (0/10) | 61% |
+| MCTS-100 | 0% (0/10) | 61% |
 
 ---
 
@@ -63,18 +64,12 @@
 ### Connect Four baseline is moderate
 - Beats random 70%, struggles at minimax-1 (10%), fails at minimax-2+
 - Valid moves 92-100% — excellent format compliance
-- Clear training target: push minimax-1 win rate from 10% to 40%+
+- Clear training target: push minimax-1 win rate up
 
 ### Nim and TicTacToe are weaker targets
-- Nim: low valid rates (82-96%), barely beats random (40%)
-- TicTacToe: lowest valid rates (52-81%), solved game limits ceiling
-- Both have less room for meaningful improvement
-
-### Valid move rates improved significantly with lenient parsing
-- Nim: 53% → 91% (fixed missing semicolons)
-- TicTacToe: 48% → 81% (fixed missing player prefix)
-- Breakthrough: 75% → 87% (fixed missing capture asterisk)
-- Connect Four: was already 90%+ (column numbers are simple)
+- Nim: valid rates 82-96%, barely beats random (40%)
+- TicTacToe: valid rates 59-90%, solved game limits ceiling
+- TicTacToe's `x(row,col)` format is inherently hard for the model
 
 ---
 
@@ -87,34 +82,31 @@
 | Base | 4/20 | 20% | 92% |
 | Opponent-Modeling | 3/20 | 15% | 100% |
 
-**Finding:** No benefit from opponent-modeling prompt in `/no_think` mode. The model doesn't actually reason about opponents when thinking is suppressed. This establishes the condition F baseline — prompting alone doesn't help.
+**Finding:** No benefit from opponent-modeling prompt in `/no_think` mode. This establishes the condition F baseline — prompting alone doesn't help.
 
 ---
 
-## 4. Thinking Mode Observations
+## 4. Thinking Mode Analysis
 
-### Qwen3-4B's default thinking is problematic
-- Internal `<think>` chain-of-thought consumes 2000+ tokens per move
-- Most tokens spent parsing ASCII board representation, not strategizing
-- Often never finishes thinking within token budget
-- Previous valid rates of 12-50% were caused by this, not model inability
+### Qwen3-4B's default thinking wastes tokens
+- Internal `<think>` CoT consumes 2000+ tokens parsing ASCII board representation
+- Never reaches strategic analysis within reasonable token budget
+- Previous 12-50% valid rates were caused by this
 
-### `/no_think` + `<reasoning>` tags is the solution
+### Solution: `/no_think` + `<reasoning>` tags
 - Suppresses Qwen's verbose internal CoT
-- Our `<reasoning>` tags produce concise strategic analysis (2-3 sentences, ~50-80 tokens)
-- Example output:
+- `<reasoning>` tags produce strategic analysis in 2-3 sentences (~50-80 tokens)
+- Game-agnostic — same format works for all games
+- Example:
   ```
-  <reasoning>The opponent has two in a row at columns 4 and 5. To block this,
-  dropping in column 5 would prevent completion. Column 4 also extends my own
-  line.</reasoning>
+  <reasoning>The opponent has two in a row at columns 4 and 5. Dropping in
+  column 5 blocks their threat. Column 4 also extends my line.</reasoning>
   <answer>5</answer>
   ```
-- Works across all games without game-specific templates
-- Based on SPIRAL paper format: structured tags, free-form reasoning content
 
 ### Board representation matters
-- Raw OpenSpiel ASCII (`..xx...`) confuses the model → wastes tokens parsing
-- Clean spaced format with column labels → model immediately reads positions
+- Raw OpenSpiel ASCII confuses the model
+- Clean spaced format with column labels works well:
   ```
     . . . . . . .
     . . x x . . .
@@ -124,15 +116,22 @@
 
 ---
 
-## 5. Methodology
+## 5. Move Parsing Improvements
+
+Invalid move patterns identified and fixed:
+- **TicTacToe:** Model outputs `(1,1)` without player prefix → infer from legal actions
+- **Nim:** Model omits trailing semicolon → flexible `pile:X, take:Y` parsing
+- **Breakthrough:** Model omits capture asterisk → match `d3c2` against `d3c2*`
+- **All games:** Fall back to searching full response when `<answer>` tag missing
+
+---
+
+## 6. Methodology
 
 ### Evaluation setup
-- Each difficulty level: 10 games with alternating first/second player
+- 10 games per difficulty level, alternating first/second player
 - Invalid moves fall back to random play
-- Opponents:
-  - **Random:** uniform random over legal moves
-  - **Minimax-1/2/4:** OpenSpiel alpha-beta with heuristic value function at depth 1/2/4
-  - **MCTS-100:** OpenSpiel Monte Carlo Tree Search with 100 simulations, random rollout evaluator
+- Opponents: Random, Minimax depth 1/2/4, MCTS 100 simulations
 
 ### Prompt format
 ```
@@ -150,27 +149,19 @@ Respond in this exact format:
 /no_think
 ```
 
-### Move parsing (lenient)
-- Primary: exact match against OpenSpiel legal action strings inside `<answer>` tag
-- Fallbacks per game:
-  - Connect Four: bare column digits 0-6
-  - TicTacToe: add missing player prefix (`(0,1)` → `x(0,1)`)
-  - Nim: flexible `pile:X, take:Y` without requiring semicolon
-  - Breakthrough: match without capture asterisk (`d3c2` → `d3c2*`)
-
-### Scripts
+### Scripts and logs
 - Calibration: `scripts/calibrate_transfer.py`
-- Detailed logs saved to `results/calibration_v4/` (JSON with per-move model responses)
+- Logs with per-move model responses: `results/calibration_v4/`
 
 ---
 
-## 6. Recommended Evaluation Hierarchy for the Experiment
+## 7. Evaluation Hierarchy for the Experiment
 
 | Level | Game | Opponent | Expected signal |
 |---|---|---|---|
 | **In-domain** | Connect Four | Pons solver | High — direct training target |
-| **Near-transfer** | Connect Four | Minimax-1/2/4 ladder | High — same game, different eval |
-| **Primary transfer** | Breakthrough | Minimax-1/2/4 + MCTS-100 | Moderate — best gradient |
-| **Secondary transfer** | Nim | Minimax-1/2/4 | Low — fewer valid moves |
+| **Near-transfer** | Connect Four | Minimax ladder | High — same game, different eval |
+| **Primary transfer** | Breakthrough | Minimax ladder + MCTS | Moderate — best gradient |
+| **Secondary transfer** | Nim | Minimax ladder | Low — fewer valid moves |
 | **Control** | TicTacToe | Minimax-2 | None expected — game is solved |
-| **Non-adversarial** | GSM8K / MATH-500 | N/A | None expected — adversarial specificity control |
+| **Non-adversarial** | GSM8K / MATH-500 | N/A | None expected — specificity control |

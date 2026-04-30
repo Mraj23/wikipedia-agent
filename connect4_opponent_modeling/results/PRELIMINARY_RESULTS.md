@@ -1,169 +1,111 @@
 # Preliminary Results: Connect Four Opponent Modeling
 
-**Date:** April 29-30, 2026
+**Last Updated:** April 30, 2026
 **Model:** Qwen3-4B (instruct)
-**Hardware:** Lambda Labs A100-SXM4-40GB (calibration), H100 80GB (training)
 
 ---
 
-## 1. Baseline Calibration: Difficulty Ladder
+## Project Status
 
-We evaluated the untrained Qwen3-4B instruct model on four OpenSpiel games against opponents of increasing strength. Each level was tested over 5 games with alternating first/second player.
+### What's Done
+- [x] Evaluation pipeline: difficulty ladder across 4 games (Connect Four, Breakthrough, Nim, TicTacToe)
+- [x] Baseline calibration: untrained model performance measured at all difficulty levels
+- [x] Prompt comparison: confirmed no effect from opponent-modeling prompts alone
+- [x] Prompt engineering: `/no_think` + `<reasoning>/<answer>` format producing concise strategic reasoning
+- [x] Clean board representation for Connect Four
+- [x] Lenient move parsing for all games
+- [x] GTBench integration with local HF model adapter
+- [x] Training infrastructure: GRPO with entropy bonus, balanced position buffer, collapse detection, vLLM
+- [x] W&B monitoring integration
 
-### Method
+### What's Not Done
+- [ ] Successful RL training run (previous attempts collapsed to "always play center")
+- [ ] Conditions D and E (the actual experiment)
+- [ ] Transfer evaluation after training
+- [ ] Mechanistic probe (neutral prompt opponent prediction test)
+- [ ] GSM8K/MATH-500 non-adversarial control
 
-- Model uses `/no_think` mode (Qwen3-4B is a thinking model; without this, chain-of-thought consumes 2000+ tokens per move and often never finishes)
-- Prompts show the board state and legal moves in OpenSpiel's native format, asking the model to copy a move exactly
-- Invalid moves fall back to random play
-- Opponents: Random, Minimax depth 1/2/4, MCTS with 100 simulations
+---
 
-### Results
+## Key Results
 
-| Opponent | Connect Four | TicTacToe | Breakthrough | Nim |
+### 1. Baseline Game Performance (Untrained Model)
+
+| Opponent | Connect Four | Breakthrough | Nim | TicTacToe |
 |---|---|---|---|---|
-| **Random** | 100% (5/5) | 40% (2/5) | 80% (4/5) | 60% (3/5) |
-| **Minimax-1** | 40% (2/5) | 60% (3/5) | 80% (4/5) | 80% (4/5) |
-| **Minimax-2** | 60% (3/5) | 0% (0/5) | 40% (2/5) | 0% (0/5) |
-| **Minimax-4** | 20% (1/5) | 0% (0/5) | 20% (1/5) | 0% (0/5) |
-| **MCTS-100** | 0% (0/5) | 0% (0/5) | 0% (0/5) | 0% (0/5) |
+| Random | 70% | **90%** | 40% | 40% |
+| Minimax-1 | 10% | **60%** | 20% | 20% |
+| Minimax-2 | 0% | **50%** | 10% | 0% |
+| Minimax-4 | 0% | **40%** | 0% | 0% |
+| MCTS-100 | 0% | **10%** | 0% | 0% |
 
-**Valid move rates:**
+Breakthrough has the smoothest gradient and most room for improvement.
 
-| Game | Valid Move Rate |
-|---|---|
-| Connect Four | 98-100% |
-| TicTacToe | 89-100% |
-| Breakthrough | 89-96% |
-| Nim | 53-93% |
+### 2. Prompt-Only Opponent Modeling Has No Effect
 
-### Key Findings
+Base prompt: 20% win rate vs Minimax-1 (20 games)
+Opponent-modeling prompt: 15% win rate vs Minimax-1 (20 games)
 
-1. **The model genuinely plays all four games.** Valid move rates are 89-100% for most games (Nim is lower due to its unusual action format).
+Prompting the model to consider opponent responses doesn't help when thinking is suppressed. This validates condition F as a real baseline.
 
-2. **Clear difficulty gradient.** Win rate drops monotonically from random to MCTS-100, providing a measurable range for detecting improvement from RL training.
+### 3. Training Collapsed to Mode Exploitation
 
-3. **Detectable training target.** The model beats random consistently but struggles at minimax-2+. If RL pushes minimax-2 win rate from 60% to 80% on Connect Four, that's a measurable improvement.
+Condition C (value-only RL) trained for 500 steps. Reward climbed from 0.2 → 0.67, but the model converged to "always play column 3." Pons benchmark: 0%.
 
-4. **MCTS-100 is unbeatable** by this model size, consistent with GTBench's published finding that all LLMs (including GPT-4) score NRA ≈ -1 against MCTS on deterministic games.
+Root causes: no entropy regularization, biased position buffer (35% column-3-optimal), no collapse monitoring.
+
+Fixes implemented (untested on GPU): entropy bonus, column-balanced buffer (14% per column), dynamic temperature, diversity monitoring in W&B.
 
 ---
 
-## 2. Prompt Comparison: Base vs Opponent-Modeling
+## Training Infrastructure Status
 
-We tested whether asking the model to reason about opponent responses at inference time (no RL training) improves Connect Four play.
-
-### Method
-
-- 20 games per prompt style against Minimax depth 1
-- Alternating first/second player
-- `/no_think` mode (model does not actually perform chain-of-thought)
-- **Base prompt:** "Pick one move. Copy it exactly."
-- **Opponent-modeling prompt:** "Before choosing, think about what your opponent would play in response to each candidate move. Which column would they most likely choose? Then pick the move that leaves you in the best position after their response."
-
-### Results
-
-| Prompt Style | Wins | Win Rate | Valid Moves |
-|---|---|---|---|
-| **Base** | 4/20 | 20% | 92% (101/110) |
-| **Opponent-Modeling** | 3/20 | 15% | 100% (185/185) |
-
-### Key Findings
-
-1. **No prompt-only effect.** Asking the model to consider opponent responses does not improve win rate (20% vs 15%, within noise).
-
-2. **This is expected in `/no_think` mode.** The model suppresses chain-of-thought, so the opponent-modeling instruction has no mechanism to affect reasoning. The model outputs the same quality moves regardless of prompt complexity.
-
-3. **Opponent-modeling prompt does improve valid move rate** (100% vs 92%). The longer, more structured prompt appears to help the model produce cleaner output format.
-
-4. **This establishes the F condition baseline.** If RL training with opponent prediction (condition E) improves performance where prompting alone (condition F) doesn't, the improvement comes from training, not from the prompt.
+| Component | Status | Notes |
+|---|---|---|
+| GRPO trainer | Ready | Entropy bonus, 8-bit AdamW, gradient checkpointing |
+| vLLM generation | Ready | CPU offloading, ~55s/step with group_size=64 |
+| Position buffer | Ready | Column-balanced, 1000 positions, cached to JSON |
+| W&B monitoring | Ready | Loss, KL, rewards, unique_moves, most_common_pct, temperature |
+| Collapse detection | Ready | Warns when >80% play same column, auto-increases temperature |
+| Prompt format | Ready | `/no_think` + `<reasoning>/<answer>` tags |
+| Evaluation | Ready | Difficulty ladder, 4 games, detailed JSON logs |
+| Mechanistic probe | Not built | Needs neutral prompt opponent prediction evaluation |
 
 ---
 
-## 3. Training Attempt: Condition C (Value-Only RL)
-
-### Method
-
-- Model: Qwen3-4B instruct
-- Training: GRPO with group_size=64, lr=1e-6, 500 steps
-- Reward: 0.67 × move_quality + 0.33 × terminal
-- Position buffer: 1000 positions (column-balanced)
-- Hardware: Lambda H100 80GB with vLLM CPU offloading (~55s/step)
-
-### Results
-
-| Step | Reward | KL | Notes |
-|---|---|---|---|
-| 0 | 0.199 | 0.000 | Baseline |
-| 100 | 0.396 | 0.116 | Learning |
-| 200 | 0.147 | 0.339 | Dip |
-| 300 | 0.544 | 0.275 | Recovery |
-| 400 | 0.670 | 0.448 | Converged |
-| 500 | 0.670 | - | Pons benchmark: 0.0% |
-
-### Failure Analysis
-
-**The model collapsed to "always play column 3."** By step 400, all 64 completions in every group produced the identical move. Reward converged to 0.670 (the maximum for always-center on most positions). Pons benchmark scored 0% because the model played center regardless of board state.
-
-**Root causes identified:**
-
-1. **No entropy regularization.** Without an entropy bonus in the loss, the policy collapsed to a single deterministic action. Once all completions were identical, advantages = 0, gradients = 0, learning stopped.
-
-2. **Biased position buffer.** Column 3 was the optimal move on 35% of buffer positions (vs 14% expected). "Always play center" was a viable exploit of the reward function.
-
-3. **No diversity monitoring.** The collapse happened between step 100 and step 400 but was invisible in the reward logs. Only discovered by manually inspecting model outputs after the run.
-
-### Fixes Applied (not yet tested on GPU)
-
-- Entropy bonus (`entropy_coef=0.01`) added to GRPO loss
-- Column-balanced position buffer regenerated (each column optimal on ~14% of positions)
-- Collapse detection: logs `unique_moves` and `most_common_pct` per step
-- Dynamic temperature: increases when >80% of completions play the same move
-
----
-
-## 4. Infrastructure Learnings
-
-### What works
-- **vLLM CPU offloading** for generation (~55s/step vs ~160s without): offload training model to CPU, generate with vLLM on full GPU, destroy vLLM, move model back for backward pass
-- **Pre-generated position buffers** loaded from JSON (~0s vs ~20 min generation on GPU)
-- **`/no_think` mode** for evaluation: 98-100% valid moves vs 12-50% with thinking enabled (thinking consumes too many tokens)
-- **OpenSpiel native action format** in prompts: model copies legal moves exactly when asked
-
-### What failed
-- **Qwen3-4B-Base** generates Chinese text, can't produce XML format even with 64 rollouts
-- **SFT warmup** with prompt token masking bug wasted training signal (90% of loss on predicting the prompt)
-- **Gradient checkpointing** disables KV cache in HuggingFace, making generation 256x slower
-- **GTBench** loads 4 model copies for a single evaluation — too memory-intensive for direct use
-
-### Cost Summary
+## Costs to Date
 
 | Run | Hardware | Time | Cost |
 |---|---|---|---|
-| First GPU attempt (GH200) | 1x GH200 96GB | ~3 hrs | ~$7 |
-| Training run (H100) | 1x H100 80GB | ~9 hrs | ~$39 |
-| Calibration (A100) | 1x A100 40GB | ~3 hrs | ~$4 |
-| **Total** | | | **~$50** |
+| GH200 training attempt | 1x GH200 96GB | ~3 hrs | ~$7 |
+| H100 training (collapsed) | 1x H100 80GB | ~9 hrs | ~$39 |
+| A100 calibration | 1x A100 40GB | ~4 hrs | ~$5 |
+| **Total** | | | **~$51** |
 
 ---
 
-## 5. Open Questions
+## Next Steps
 
-1. **Will entropy regularization prevent mode collapse?** The fix is implemented but untested on GPU.
-
-2. **Can RL training actually improve Connect Four play beyond the instruct baseline?** The baseline already beats random 100% and minimax-1 40%. Is there room for meaningful improvement?
-
-3. **Will training transfer to other games?** The model already plays Breakthrough at 80% vs minimax-1 with zero Connect Four-specific training. If RL pushes Connect Four to 80% vs minimax-1, will Breakthrough also improve?
-
-4. **Is `/no_think` the right evaluation mode?** The model might play better with thinking enabled, but generating 2000+ tokens per move makes evaluation extremely slow and often fails to produce a final answer.
-
-5. **Is 20 games per condition enough statistical power?** The prompt comparison (20% vs 15%) is well within noise. We may need 50-100 games per comparison.
+1. **Run training with all fixes** on 80GB GPU (entropy, balanced buffer, new prompt format)
+2. **Verify no collapse** within first 50 steps via W&B monitoring
+3. **Run conditions C, D, E** sequentially (500 steps each)
+4. **Re-evaluate on difficulty ladder** — compare C vs D vs E on Breakthrough and Connect Four
+5. **Build mechanistic probe** — neutral prompt opponent prediction test
+6. **Run non-adversarial controls** — GSM8K, MATH-500
 
 ---
 
-## 6. Next Steps
+## Files Reference
 
-1. **Test entropy + balanced buffer fixes** on GPU to confirm mode collapse is prevented
-2. **Run conditions C, D, E** with the fixes and compare
-3. **Re-evaluate all conditions** on the difficulty ladder across all 4 games
-4. **Build the mechanistic probe** (neutral prompt opponent prediction test)
-5. **Run GSM8K/MATH-500** as non-adversarial control
+| File | Purpose |
+|---|---|
+| `scripts/calibrate_transfer.py` | Difficulty ladder evaluation |
+| `scripts/run_preliminary.sh` | Chain C → D → E training |
+| `scripts/lambda_setup.sh` | Instance setup |
+| `training/prompts.py` | `/no_think` + `<reasoning>/<answer>` prompt templates |
+| `training/grpo_config.py` | Hyperparameters (entropy_coef=0.01, group_size=64, lr=1e-6) |
+| `spiral/grpo_trainer.py` | GRPO training loop with vLLM, monitoring |
+| `data/position_buffer.json` | Column-balanced 1000 positions |
+| `results/EVALUATION_BASELINES.md` | Full baseline data and methodology |
+| `results/calibration_v4/` | Detailed per-move JSON logs |
+| `CLAUDE.md` | Experiment design and critical invariants |
