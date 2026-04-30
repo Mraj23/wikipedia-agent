@@ -63,8 +63,8 @@ Board:
 
 Legal moves: {', '.join(legal_strs)}
 
-Respond in this format:
-<think>Briefly analyze threats and opportunities (2-3 sentences)</think>
+Respond in this exact format:
+<reasoning>Analyze threats and best move in 2-3 sentences</reasoning>
 <answer>your_move</answer>
 
 /no_think"""

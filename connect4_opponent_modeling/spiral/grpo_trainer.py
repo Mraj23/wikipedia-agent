@@ -215,7 +215,7 @@ class GRPOTrainer:
             from collections import Counter
             moves_played = []
             for resp in completions:
-                parsed = parse_response("<think>" + resp, self.config.condition)
+                parsed = parse_response(resp, self.config.condition)
                 moves_played.append(parsed.get("move"))
             valid_moves = [m for m in moves_played if m is not None]
             move_counts = Counter(valid_moves)
@@ -577,11 +577,9 @@ class GRPOTrainer:
         condition = self.config.condition
 
         for response in completions:
-            # The prompt ends with an open <think> tag, so the model's
-            # response is a continuation. Prepend <think> so parse_response
-            # can find the full <think>...</think> pattern.
-            full_response = "<think>" + response
-            r, comp = self._compute_single_reward(env, full_response)
+            # With /no_think + <reasoning>/<answer> format, the model's
+            # response contains the tags directly. No prepending needed.
+            r, comp = self._compute_single_reward(env, response)
             rewards.append(r)
             components.append(comp)
 

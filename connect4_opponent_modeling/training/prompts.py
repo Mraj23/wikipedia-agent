@@ -16,132 +16,121 @@ from env.connect_four_env import ConnectFourEnv
 
 SYSTEM_PROMPT = "You are playing Connect Four. Think carefully before each move."
 
+# All conditions use /no_think (suppresses Qwen's verbose internal thinking)
+# and our own <reasoning>/<answer> tags for structured, concise analysis.
+#
+# The causal ladder differs ONLY in what the model is asked to reason about:
+#   B: Just pick a move (sparse reward, no structured reasoning)
+#   C: Analyze threats and opportunities
+#   D: Analyze + predict the board state after your move
+#   E: Analyze + predict opponent's response to your move
+#   F: Same as E but inference-time only (no RL training)
+
 CONDITION_PROMPTS: Dict[str, str] = {
     "A": (
-        "You are playing Connect Four.\n\n"
-        "{board}\n\n"
-        "Legal moves: {legal_moves}\n\n"
-        "Think about the position, then choose a column to play.\n"
-        "Respond with your reasoning in <think> tags, then your move in <move> tags.\n"
-        "Example: <think>I should play center.</think><move>3</move>"
+        "Connect Four. You are 'x'. Drop into column 0-6. Get 4 in a row to win.\n\n"
+        "Board:\n{board}\n\n"
+        "Legal columns: {legal_moves}\n\n"
+        "Respond in this exact format:\n"
+        "<reasoning>Brief analysis</reasoning>\n"
+        "<answer>column_number</answer>\n\n"
+        "/no_think"
     ),
     "B": (
-        "You are playing Connect Four.\n\n"
-        "{board}\n\n"
-        "Legal moves: {legal_moves}\n\n"
-        "Think carefully about the position and choose the best move.\n"
-        "Respond with your reasoning in <think> tags, then your move in <move> tags.\n"
-        "Example: <think>I need to block the opponent.</think><move>3</move>"
+        "Connect Four. You are 'x'. Drop into column 0-6. Get 4 in a row to win.\n\n"
+        "Board:\n{board}\n\n"
+        "Legal columns: {legal_moves}\n\n"
+        "Respond in this exact format:\n"
+        "<reasoning>Brief analysis</reasoning>\n"
+        "<answer>column_number</answer>\n\n"
+        "/no_think"
     ),
     "C": (
-        "You are playing Connect Four.\n\n"
-        "{board}\n\n"
-        "Legal moves: {legal_moves}\n\n"
-        "Analyze this position carefully. Consider threats, opportunities, and "
-        "the strategic value of each legal move.\n"
-        "Respond with your analysis in <think> tags, then your move in <move> tags.\n"
-        "Example: <think>Column 3 controls the center and creates a double threat.</think>"
-        "<move>3</move>"
+        "Connect Four. You are 'x'. Drop into column 0-6. Get 4 in a row to win.\n\n"
+        "Board:\n{board}\n\n"
+        "Legal columns: {legal_moves}\n\n"
+        "Respond in this exact format:\n"
+        "<reasoning>Analyze threats and opportunities in 2-3 sentences</reasoning>\n"
+        "<answer>column_number</answer>\n\n"
+        "/no_think"
     ),
     "D": (
-        "You are playing Connect Four.\n\n"
-        "{board}\n\n"
-        "Legal moves: {legal_moves}\n\n"
-        "Analyze this position carefully. Consider threats, opportunities, and "
-        "the strategic value of each legal move.\n"
-        "Before choosing your move, predict how your opponent will respond to "
-        "your top candidate moves. State your prediction in the "
-        "<opponent_prediction> tag.\n"
-        "After choosing your move, predict the board state that will result from "
-        "your move. Show it as a text grid in the <future_state> tag.\n"
-        "Respond with your analysis in <think> tags, your opponent's predicted "
-        "response column in <opponent_prediction> tags, the predicted board state in "
-        "<future_state> tags, then your move in <move> tags.\n"
-        "Example:\n"
-        "<think>Column 3 builds toward a vertical connection. Opponent likely "
-        "responds column 4.</think>"
-        "<opponent_prediction>4</opponent_prediction>"
-        "<future_state>\n"
-        ". . . . . . .\n"
-        ". . . . . . .\n"
-        ". . . . . . .\n"
-        ". . . . . . .\n"
-        ". . . X . . .\n"
-        ". . O X O . .\n"
-        "</future_state>"
-        "<move>3</move>"
+        "Connect Four. You are 'x'. Drop into column 0-6. Get 4 in a row to win.\n\n"
+        "Board:\n{board}\n\n"
+        "Legal columns: {legal_moves}\n\n"
+        "Respond in this exact format:\n"
+        "<reasoning>Analyze threats and opportunities in 2-3 sentences</reasoning>\n"
+        "<future_state>Predict the board after your move (text grid)</future_state>\n"
+        "<answer>column_number</answer>\n\n"
+        "/no_think"
     ),
     "E": (
-        "You are playing Connect Four.\n\n"
-        "{board}\n\n"
-        "Legal moves: {legal_moves}\n\n"
-        "Analyze this position carefully. Consider threats, opportunities, and "
-        "the strategic value of each legal move.\n"
-        "Before choosing your move, predict how your opponent will respond to "
-        "your top candidate moves. State your prediction in the "
-        "<opponent_prediction> tag.\n"
-        "Respond with your analysis in <think> tags, your opponent's predicted "
-        "response column in <opponent_prediction> tags, then your move in <move> tags.\n"
-        "Example:\n"
-        "<think>If I play column 3, opponent likely responds column 4.</think>"
-        "<opponent_prediction>4</opponent_prediction>"
-        "<move>3</move>"
+        "Connect Four. You are 'x'. Drop into column 0-6. Get 4 in a row to win.\n\n"
+        "Board:\n{board}\n\n"
+        "Legal columns: {legal_moves}\n\n"
+        "Respond in this exact format:\n"
+        "<reasoning>Analyze threats and opportunities in 2-3 sentences</reasoning>\n"
+        "<opponent_prediction>Predict which column your opponent will play next</opponent_prediction>\n"
+        "<answer>column_number</answer>\n\n"
+        "/no_think"
     ),
     "F": (
-        "You are playing Connect Four.\n\n"
-        "{board}\n\n"
-        "Legal moves: {legal_moves}\n\n"
-        "Analyze this position carefully. For each candidate move, think about:\n"
-        "1. What threat or advantage does it create?\n"
-        "2. How will your opponent most likely respond?\n"
-        "3. Does the opponent's response negate your advantage?\n\n"
-        "Before choosing your move, predict how your opponent will respond to "
-        "your top candidate moves. State your prediction in the "
-        "<opponent_prediction> tag.\n"
-        "Respond with your analysis in <think> tags, your opponent's predicted "
-        "response column in <opponent_prediction> tags, then your move in <move> tags.\n"
-        "Example:\n"
-        "<think>If I play column 3, opponent likely responds column 4 to block. "
-        "If I play column 2 instead, opponent must respond column 2 or I get a "
-        "double threat.</think>"
-        "<opponent_prediction>2</opponent_prediction>"
-        "<move>2</move>"
+        "Connect Four. You are 'x'. Drop into column 0-6. Get 4 in a row to win.\n\n"
+        "Board:\n{board}\n\n"
+        "Legal columns: {legal_moves}\n\n"
+        "Respond in this exact format:\n"
+        "<reasoning>Analyze threats and opportunities. For your best candidate "
+        "moves, predict how your opponent would respond.</reasoning>\n"
+        "<opponent_prediction>Predict which column your opponent will play next</opponent_prediction>\n"
+        "<answer>column_number</answer>\n\n"
+        "/no_think"
     ),
     "G": (
-        "You are playing Connect Four.\n\n"
-        "{board}\n\n"
-        "Legal moves: {legal_moves}\n\n"
-        "Analyze this position carefully. Consider threats, opportunities, and "
-        "the strategic value of each legal move.\n"
-        "Before choosing your move, count the total number of pieces on the "
-        "board and predict that count modulo 7. State your prediction in the "
-        "<piece_count> tag.\n"
-        "Respond with your analysis in <think> tags, your piece count prediction "
-        "in <piece_count> tags, then your move in <move> tags.\n"
-        "Example:\n"
-        "<think>There are 5 pieces on the board. 5 mod 7 = 5.</think>"
-        "<piece_count>5</piece_count>"
-        "<move>3</move>"
+        "Connect Four. You are 'x'. Drop into column 0-6. Get 4 in a row to win.\n\n"
+        "Board:\n{board}\n\n"
+        "Legal columns: {legal_moves}\n\n"
+        "Respond in this exact format:\n"
+        "<reasoning>Analyze threats and opportunities in 2-3 sentences</reasoning>\n"
+        "<piece_count>Count total pieces on board mod 7</piece_count>\n"
+        "<answer>column_number</answer>\n\n"
+        "/no_think"
     ),
 }
 
-# Required tags per condition
+# Required tags per condition (used for format validation)
 REQUIRED_TAGS: Dict[str, List[str]] = {
-    "A": ["think", "move"],
-    "B": ["think", "move"],
-    "C": ["think", "move"],
-    "D": ["think", "opponent_prediction", "future_state", "move"],
-    "E": ["think", "opponent_prediction", "move"],
-    "F": ["think", "opponent_prediction", "move"],
-    "G": ["think", "piece_count", "move"],
+    "A": ["reasoning", "answer"],
+    "B": ["reasoning", "answer"],
+    "C": ["reasoning", "answer"],
+    "D": ["reasoning", "future_state", "answer"],
+    "E": ["reasoning", "opponent_prediction", "answer"],
+    "F": ["reasoning", "opponent_prediction", "answer"],
+    "G": ["reasoning", "piece_count", "answer"],
 }
+
+
+def _clean_board(env: ConnectFourEnv) -> str:
+    """Create a clean, spaced board with column labels."""
+    grid = env.to_text_grid()
+    lines = grid.split("\n")
+    # Space out each row and add column numbers
+    clean = []
+    for line in lines:
+        if line.startswith("Columns") or line.startswith("Your"):
+            continue  # Skip the old labels
+        clean.append("  " + " ".join(list(line.replace(" ", ""))) if "." in line or "X" in line or "O" in line else line)
+    clean.append("  0 1 2 3 4 5 6")
+    return "\n".join(clean)
 
 
 def format_prompt(condition: str, env: ConnectFourEnv) -> str:
     """Format a prompt template for the given condition and board state.
 
+    Uses /no_think to suppress Qwen's internal thinking, with our own
+    <reasoning>/<answer> tags for structured, concise analysis.
+
     Args:
-        condition: One of 'A', 'B', 'C', 'D', 'E', 'F'.
+        condition: One of 'A', 'B', 'C', 'D', 'E', 'F', 'G'.
         env: Current game environment.
 
     Returns:
@@ -151,13 +140,9 @@ def format_prompt(condition: str, env: ConnectFourEnv) -> str:
         KeyError: If condition is not recognized.
     """
     template = CONDITION_PROMPTS[condition]
-    board = env.to_text_grid()
+    board = _clean_board(env)
     legal = ", ".join(str(m) for m in env.legal_moves())
-    prompt = template.format(board=board, legal_moves=legal)
-    # Append an open <think> tag so the base model continues generating
-    # instead of stopping at the example's closing </move> tag.
-    prompt += "\n\n<think>"
-    return prompt
+    return template.format(board=board, legal_moves=legal)
 
 
 def parse_response(response: str, condition: str) -> Dict:
@@ -172,7 +157,7 @@ def parse_response(response: str, condition: str) -> Dict:
         opponent_prediction (int|None), future_state (str|None).
     """
     result: Dict = {
-        "think": None,
+        "reasoning": None,
         "move": None,
         "opponent_prediction": None,
         "future_state": None,
@@ -180,15 +165,21 @@ def parse_response(response: str, condition: str) -> Dict:
         "raw": response,
     }
 
-    # Extract <think>...</think>
-    think_match = re.search(r"<think>(.*?)</think>", response, re.DOTALL)
-    if think_match:
-        result["think"] = think_match.group(1).strip()
+    # Extract <reasoning>...</reasoning>
+    reasoning_match = re.search(r"<reasoning>(.*?)</reasoning>", response, re.DOTALL)
+    if reasoning_match:
+        result["reasoning"] = reasoning_match.group(1).strip()
 
-    # Extract <move>...</move>
-    move_match = re.search(r"<move>\s*(\d)\s*</move>", response)
-    if move_match:
-        result["move"] = int(move_match.group(1))
+    # Extract <answer>...</answer> → move
+    answer_match = re.search(r"<answer>\s*(\d)\s*</answer>", response)
+    if answer_match:
+        result["move"] = int(answer_match.group(1))
+
+    # Fallback: extract <move>...</move> for backward compat
+    if result["move"] is None:
+        move_match = re.search(r"<move>\s*(\d)\s*</move>", response)
+        if move_match:
+            result["move"] = int(move_match.group(1))
 
     # Extract <opponent_prediction>...</opponent_prediction> (conditions D, E, F)
     if condition in ("D", "E", "F"):
@@ -228,10 +219,10 @@ def validate_response(
 
     # Check required tags are present
     for tag in required:
-        if tag == "think" and parsed.get("think") is None:
-            return False, f"Missing <think> tag for condition {condition}"
-        elif tag == "move" and parsed.get("move") is None:
-            return False, f"Missing <move> tag for condition {condition}"
+        if tag == "reasoning" and parsed.get("reasoning") is None:
+            return False, f"Missing <reasoning> tag for condition {condition}"
+        elif tag == "answer" and parsed.get("move") is None:
+            return False, f"Missing <answer> tag for condition {condition}"
         elif tag == "opponent_prediction" and parsed.get("opponent_prediction") is None:
             return False, f"Missing <opponent_prediction> tag for condition {condition}"
         elif tag == "future_state" and parsed.get("future_state") is None:

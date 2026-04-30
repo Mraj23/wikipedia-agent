@@ -301,17 +301,20 @@ class RewardCalculator:
         Returns:
             1.0 if all required tags present and move is a valid integer, else 0.0.
         """
-        required = REQUIRED_TAGS.get(condition, ["think", "move"])
+        required = REQUIRED_TAGS.get(condition, ["reasoning", "answer"])
 
         for tag in required:
             pattern = rf"<{tag}>.*?</{tag}>"
             if not re.search(pattern, response, re.DOTALL):
                 return 0.0
 
-        # Check move contains a valid integer
-        move_match = re.search(r"<move>\s*(\d)\s*</move>", response)
-        if not move_match:
-            return 0.0
+        # Check answer contains a valid integer
+        answer_match = re.search(r"<answer>\s*(\d)\s*</answer>", response)
+        if not answer_match:
+            # Fallback: check <move> for backward compat
+            move_match = re.search(r"<move>\s*(\d)\s*</move>", response)
+            if not move_match:
+                return 0.0
 
         return 1.0
 
