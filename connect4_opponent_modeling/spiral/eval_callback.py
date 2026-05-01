@@ -1,7 +1,7 @@
 """Periodic evaluation callback during GRPO training.
 
-Runs pons_benchmark + probe (fast evals) at regular intervals.
-GTBench and math evals are skipped during training for speed.
+Runs the fast in-domain and probe checks during training. The full difficulty
+ladder and optional non-adversarial controls are left to the offline eval suite.
 """
 
 import json

@@ -1,10 +1,4 @@
-"""Plotting utilities for learning curves and results visualization.
-
-Generates publication-quality plots for:
-- GTBench win rate vs training step
-- Probe accuracy vs training step
-- Final results bar chart grouped by benchmark
-"""
+"""Plotting utilities for learning curves and results visualization."""
 
 import argparse
 import json
@@ -69,7 +63,7 @@ def _ensure_matplotlib() -> None:
 
 
 def plot_transfer_curves(results_dir: str, output_dir: str) -> None:
-    """Plot GTBench win rate vs training step, one line per condition.
+    """Plot Breakthrough transfer score vs training step, one line per condition.
 
     Args:
         results_dir: Directory with result JSONs.
@@ -92,13 +86,7 @@ def plot_transfer_curves(results_dir: str, output_dir: str) -> None:
         win_rates = []
         for r in sorted(cond_results, key=lambda x: x.get("step", 0)):
             step = r.get("step", 0)
-            gt = r.get("gtbench", {})
-            if "breakthrough" in gt:
-                wr = gt["breakthrough"].get("win_rate")
-            elif "win_rate" in gt:
-                wr = gt.get("win_rate")
-            else:
-                continue
+            wr = r.get("transfer_summary", {}).get("breakthrough_transfer_score")
             if wr is not None:
                 steps.append(step)
                 win_rates.append(wr)
@@ -112,16 +100,16 @@ def plot_transfer_curves(results_dir: str, output_dir: str) -> None:
             )
 
     ax.set_xlabel("Training Step", fontsize=12)
-    ax.set_ylabel("GTBench Win Rate", fontsize=12)
-    ax.set_title("Transfer Performance (GTBench) vs Training Step", fontsize=14)
+    ax.set_ylabel("Breakthrough Transfer Score", fontsize=12)
+    ax.set_title("Breakthrough Transfer vs Training Step", fontsize=14)
     ax.legend(fontsize=10)
     ax.grid(True, alpha=0.3)
     ax.set_ylim(-0.05, 1.05)
 
     fig.tight_layout()
-    fig.savefig(output_path / "transfer_curves.png", dpi=150)
+    fig.savefig(output_path / "breakthrough_transfer_curves.png", dpi=150)
     plt.close(fig)
-    print(f"Saved transfer_curves.png to {output_path}")
+    print(f"Saved breakthrough_transfer_curves.png to {output_path}")
 
 
 def plot_probe_curves(results_dir: str, output_dir: str) -> None:
@@ -200,7 +188,7 @@ def plot_main_table(results_dir: str, output_dir: str) -> None:
         return
 
     conditions = sorted(latest.keys())
-    benchmarks = ["Pons Optimal %", "Probe Accuracy", "GTBench NRA", "GSM8K"]
+    benchmarks = ["Pons Optimal %", "Probe Accuracy", "Breakthrough Transfer", "GSM8K"]
 
     fig, ax = plt.subplots(figsize=(12, 6))
     x = np.arange(len(conditions))
@@ -214,10 +202,8 @@ def plot_main_table(results_dir: str, output_dir: str) -> None:
                 val = r.get("pons_benchmark", {}).get("overall_pct_optimal", 0)
             elif bench == "Probe Accuracy":
                 val = r.get("probe", {}).get("overall_accuracy", 0)
-            elif bench == "GTBench NRA":
-                gt = r.get("gtbench", {})
-                val = gt.get("average_nra", 0)
-                val = (val + 1) / 2  # normalize from [-1,1] to [0,1]
+            elif bench == "Breakthrough Transfer":
+                val = r.get("transfer_summary", {}).get("breakthrough_transfer_score", 0)
             elif bench == "GSM8K":
                 val = r.get("gsm8k", {}).get("accuracy", 0)
             else:

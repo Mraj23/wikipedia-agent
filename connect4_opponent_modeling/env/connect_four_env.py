@@ -1,7 +1,7 @@
 """Thin wrapper around OpenSpiel's Connect Four game.
 
-OpenSpiel is used because GTBench (primary transfer eval) is also built on
-OpenSpiel, ensuring identical board representation between training and eval.
+OpenSpiel is used for both training and the canonical adversarial ladder,
+ensuring a shared game engine across intervention and evaluation.
 """
 
 import pyspiel

@@ -1,4 +1,4 @@
-"""Prompt templates for all six experimental conditions and response parsers.
+"""Prompt templates for the active experimental conditions and response parsers.
 
 Conditions A-F form a causal ladder:
   A: SFT only — imitation baseline
@@ -22,77 +22,79 @@ SYSTEM_PROMPT = "You are playing Connect Four. Think carefully before each move.
 # The causal ladder differs ONLY in what the model is asked to reason about:
 #   B: Just pick a move (sparse reward, no structured reasoning)
 #   C: Analyze threats and opportunities
-#   D: Analyze + predict the board state after your move
-#   E: Analyze + predict opponent's response to your move
+#   D/E: Same structured output contract, but reward different auxiliary fields
+#   D: auxiliary reward on future-state prediction
+#   E: auxiliary reward on opponent-response prediction
 #   F: Same as E but inference-time only (no RL training)
 
 CONDITION_PROMPTS: Dict[str, str] = {
     "A": (
-        "Connect Four. You are 'x'. Drop into column 0-6. Get 4 in a row to win.\n\n"
+        "Connect Four. You are X. Your opponent is O. Drop into column 0-6. Get 4 in a row to win.\n\n"
         "Board:\n{board}\n\n"
         "Legal columns: {legal_moves}\n\n"
         "Respond in this exact format:\n"
-        "<reasoning>Brief analysis</reasoning>\n"
-        "<answer>column_number</answer>\n\n"
+        "<reasoning>One short sentence.</reasoning>\n"
+        "<answer>single_digit_column</answer>\n\n"
         "/no_think"
     ),
     "B": (
-        "Connect Four. You are 'x'. Drop into column 0-6. Get 4 in a row to win.\n\n"
+        "Connect Four. You are X. Your opponent is O. Drop into column 0-6. Get 4 in a row to win.\n\n"
         "Board:\n{board}\n\n"
         "Legal columns: {legal_moves}\n\n"
         "Respond in this exact format:\n"
-        "<reasoning>Brief analysis</reasoning>\n"
-        "<answer>column_number</answer>\n\n"
+        "<reasoning>One short sentence.</reasoning>\n"
+        "<answer>single_digit_column</answer>\n\n"
         "/no_think"
     ),
     "C": (
-        "Connect Four. You are 'x'. Drop into column 0-6. Get 4 in a row to win.\n\n"
+        "Connect Four. You are X. Your opponent is O. Drop into column 0-6. Get 4 in a row to win.\n\n"
         "Board:\n{board}\n\n"
         "Legal columns: {legal_moves}\n\n"
         "Respond in this exact format:\n"
-        "<reasoning>Analyze threats and opportunities in 2-3 sentences</reasoning>\n"
-        "<answer>column_number</answer>\n\n"
+        "<reasoning>One or two short sentences about the best move.</reasoning>\n"
+        "<answer>single_digit_column</answer>\n\n"
         "/no_think"
     ),
     "D": (
-        "Connect Four. You are 'x'. Drop into column 0-6. Get 4 in a row to win.\n\n"
+        "Connect Four. You are X. Your opponent is O. Drop into column 0-6. Get 4 in a row to win.\n\n"
         "Board:\n{board}\n\n"
         "Legal columns: {legal_moves}\n\n"
         "Respond in this exact format:\n"
-        "<reasoning>Analyze threats and opportunities in 2-3 sentences</reasoning>\n"
-        "<future_state>Predict the board after your move (text grid)</future_state>\n"
-        "<answer>column_number</answer>\n\n"
+        "<reasoning>One or two short sentences about the best move.</reasoning>\n"
+        "<future_state>Six board rows only, using X O .</future_state>\n"
+        "<opponent_prediction>single_digit_column</opponent_prediction>\n"
+        "<answer>single_digit_column</answer>\n\n"
         "/no_think"
     ),
     "E": (
-        "Connect Four. You are 'x'. Drop into column 0-6. Get 4 in a row to win.\n\n"
+        "Connect Four. You are X. Your opponent is O. Drop into column 0-6. Get 4 in a row to win.\n\n"
         "Board:\n{board}\n\n"
         "Legal columns: {legal_moves}\n\n"
         "Respond in this exact format:\n"
-        "<reasoning>Analyze threats and opportunities in 2-3 sentences</reasoning>\n"
-        "<opponent_prediction>Predict which column your opponent will play next</opponent_prediction>\n"
-        "<answer>column_number</answer>\n\n"
+        "<reasoning>One or two short sentences about the best move.</reasoning>\n"
+        "<future_state>Six board rows only, using X O .</future_state>\n"
+        "<opponent_prediction>single_digit_column</opponent_prediction>\n"
+        "<answer>single_digit_column</answer>\n\n"
         "/no_think"
     ),
     "F": (
-        "Connect Four. You are 'x'. Drop into column 0-6. Get 4 in a row to win.\n\n"
+        "Connect Four. You are X. Your opponent is O. Drop into column 0-6. Get 4 in a row to win.\n\n"
         "Board:\n{board}\n\n"
         "Legal columns: {legal_moves}\n\n"
         "Respond in this exact format:\n"
-        "<reasoning>Analyze threats and opportunities. For your best candidate "
-        "moves, predict how your opponent would respond.</reasoning>\n"
-        "<opponent_prediction>Predict which column your opponent will play next</opponent_prediction>\n"
-        "<answer>column_number</answer>\n\n"
+        "<reasoning>One or two short sentences. Mention the opponent's likely reply.</reasoning>\n"
+        "<opponent_prediction>single_digit_column</opponent_prediction>\n"
+        "<answer>single_digit_column</answer>\n\n"
         "/no_think"
     ),
     "G": (
-        "Connect Four. You are 'x'. Drop into column 0-6. Get 4 in a row to win.\n\n"
+        "Connect Four. You are X. Your opponent is O. Drop into column 0-6. Get 4 in a row to win.\n\n"
         "Board:\n{board}\n\n"
         "Legal columns: {legal_moves}\n\n"
         "Respond in this exact format:\n"
-        "<reasoning>Analyze threats and opportunities in 2-3 sentences</reasoning>\n"
+        "<reasoning>One or two short sentences about the best move.</reasoning>\n"
         "<piece_count>Count total pieces on board mod 7</piece_count>\n"
-        "<answer>column_number</answer>\n\n"
+        "<answer>single_digit_column</answer>\n\n"
         "/no_think"
     ),
 }
@@ -102,11 +104,19 @@ REQUIRED_TAGS: Dict[str, List[str]] = {
     "A": ["reasoning", "answer"],
     "B": ["reasoning", "answer"],
     "C": ["reasoning", "answer"],
-    "D": ["reasoning", "future_state", "answer"],
-    "E": ["reasoning", "opponent_prediction", "answer"],
+    "D": ["reasoning", "future_state", "opponent_prediction", "answer"],
+    "E": ["reasoning", "future_state", "opponent_prediction", "answer"],
     "F": ["reasoning", "opponent_prediction", "answer"],
     "G": ["reasoning", "piece_count", "answer"],
 }
+
+
+def extract_tag_text(response: str, tag: str) -> Optional[str]:
+    """Extract the contents of an XML-like tag, or None if absent."""
+    match = re.search(rf"<{tag}>(.*?)</{tag}>", response, re.DOTALL)
+    if not match:
+        return None
+    return match.group(1).strip()
 
 
 def _clean_board(env: ConnectFourEnv) -> str:
@@ -116,11 +126,29 @@ def _clean_board(env: ConnectFourEnv) -> str:
     # Space out each row and add column numbers
     clean = []
     for line in lines:
-        if line.startswith("Columns") or line.startswith("Your"):
-            continue  # Skip the old labels
+        if line.startswith("Columns"):
+            continue
+        if line.startswith("Your"):
+            clean.append("  X = you, O = opponent")
+            continue
         clean.append("  " + " ".join(list(line.replace(" ", ""))) if "." in line or "X" in line or "O" in line else line)
     clean.append("  0 1 2 3 4 5 6")
     return "\n".join(clean)
+
+
+def _extract_first_int(text: str, *, min_value: Optional[int] = None, max_value: Optional[int] = None) -> Optional[int]:
+    """Extract the first integer from text, optionally bounded."""
+    if not text:
+        return None
+    matches = re.findall(r"-?\d+", text)
+    for match in matches:
+        value = int(match)
+        if min_value is not None and value < min_value:
+            continue
+        if max_value is not None and value > max_value:
+            continue
+        return value
+    return None
 
 
 def format_prompt(condition: str, env: ConnectFourEnv) -> str:
@@ -166,38 +194,30 @@ def parse_response(response: str, condition: str) -> Dict:
     }
 
     # Extract <reasoning>...</reasoning>
-    reasoning_match = re.search(r"<reasoning>(.*?)</reasoning>", response, re.DOTALL)
-    if reasoning_match:
-        result["reasoning"] = reasoning_match.group(1).strip()
+    result["reasoning"] = extract_tag_text(response, "reasoning")
 
     # Extract <answer>...</answer> → move
-    answer_match = re.search(r"<answer>\s*(\d)\s*</answer>", response)
-    if answer_match:
-        result["move"] = int(answer_match.group(1))
-
-    # Fallback: extract <move>...</move> for backward compat
-    if result["move"] is None:
-        move_match = re.search(r"<move>\s*(\d)\s*</move>", response)
-        if move_match:
-            result["move"] = int(move_match.group(1))
+    answer_text = extract_tag_text(response, "answer")
+    if answer_text is not None:
+        result["move"] = _extract_first_int(answer_text, min_value=0, max_value=6)
 
     # Extract <opponent_prediction>...</opponent_prediction> (conditions D, E, F)
     if condition in ("D", "E", "F"):
-        pred_match = re.search(r"<opponent_prediction>\s*(\d)\s*</opponent_prediction>", response)
-        if pred_match:
-            result["opponent_prediction"] = int(pred_match.group(1))
+        pred_text = extract_tag_text(response, "opponent_prediction")
+        if pred_text is not None:
+            result["opponent_prediction"] = _extract_first_int(
+                pred_text, min_value=0, max_value=6
+            )
 
-    # Extract <future_state>...</future_state> (condition D)
-    if condition == "D":
-        fs_match = re.search(r"<future_state>(.*?)</future_state>", response, re.DOTALL)
-        if fs_match:
-            result["future_state"] = fs_match.group(1).strip()
+    # Extract <future_state>...</future_state> (conditions D and E)
+    if condition in ("D", "E"):
+        result["future_state"] = extract_tag_text(response, "future_state")
 
     # Extract <piece_count>...</piece_count> (condition G)
     if condition == "G":
-        pc_match = re.search(r"<piece_count>\s*(\d+)\s*</piece_count>", response)
-        if pc_match:
-            result["piece_count"] = int(pc_match.group(1))
+        piece_count_text = extract_tag_text(response, "piece_count")
+        if piece_count_text is not None:
+            result["piece_count"] = _extract_first_int(piece_count_text)
 
     return result
 
@@ -256,7 +276,7 @@ if __name__ == "__main__":
 
     # Test parsing
     print("=== Parse/Validate Demo ===\n")
-    test_resp = "<think>I should play center.</think><move>3</move>"
+    test_resp = "<reasoning>I should play center.</reasoning><answer>3</answer>"
     parsed = parse_response(test_resp, "A")
     valid, reason = validate_response(parsed, "A", env.legal_moves())
     print(f"Response: {test_resp}")

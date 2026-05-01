@@ -8,7 +8,6 @@ returns one line of space-separated integers — one score per column.
 import logging
 import os
 import subprocess
-import shutil
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -29,19 +28,33 @@ class PonsSolver:
     # Sentinel value for illegal columns in Pons output
     ILLEGAL_SENTINEL = -1000
 
-    def __init__(self, solver_path: str = "./connect4_solver", fallback_depth: int = 8) -> None:
+    def __init__(
+        self,
+        solver_path: str = "./connect4_solver",
+        book_path: str = "./7x6.book",
+        fallback_depth: int = 8,
+    ) -> None:
         """Initialize the solver.
 
         Args:
             solver_path: Path to the Pons solver binary.
+            book_path: Path to the Pascal Pons 7x6 opening book.
             fallback_depth: Minimax depth to use when binary is absent.
         """
         # Resolve relative paths from the project root (parent of env/)
+        project_root = Path(__file__).resolve().parent.parent
+        self._project_root = project_root
+
         path = Path(solver_path)
         if not path.is_absolute():
-            project_root = Path(__file__).resolve().parent.parent
             path = project_root / path
         self._solver_path = path.resolve()
+
+        opening_book = Path(book_path)
+        if not opening_book.is_absolute():
+            opening_book = project_root / opening_book
+        self._book_path = opening_book.resolve()
+
         self._fallback = MinimaxSolver(depth=fallback_depth)
         self._warned_fallback = False
 
@@ -51,17 +64,28 @@ class PonsSolver:
         Returns:
             True if the binary can be run.
         """
-        return self._solver_path.is_file() and os.access(self._solver_path, os.X_OK)
+        return (
+            self._solver_path.is_file()
+            and os.access(self._solver_path, os.X_OK)
+            and self._book_path.is_file()
+        )
 
     def _warn_fallback(self) -> None:
         """Log a single warning about falling back to minimax."""
         if not self._warned_fallback:
+            missing = []
+            if not self._solver_path.is_file():
+                missing.append(f"binary '{self._solver_path}'")
+            elif not os.access(self._solver_path, os.X_OK):
+                missing.append(f"executable bit on '{self._solver_path}'")
+            if not self._book_path.is_file():
+                missing.append(f"opening book '{self._book_path}'")
+            missing_desc = ", ".join(missing) if missing else "required solver assets"
             logger.warning(
-                "Pons solver binary not found at '%s'. "
+                "Pons solver unavailable (%s). "
                 "Falling back to minimax (depth=%d). "
-                "For perfect play, compile the Pons solver: "
-                "https://github.com/PascalPons/connect4",
-                self._solver_path,
+                "Run scripts/bootstrap_gpu.sh to install solver assets.",
+                missing_desc,
                 self._fallback.depth,
             )
             self._warned_fallback = True
@@ -113,6 +137,7 @@ class PonsSolver:
                 input=batch_input,
                 capture_output=True,
                 text=True,
+                cwd=str(self._project_root),
                 timeout=30,
             )
             if result.returncode != 0:
@@ -120,7 +145,11 @@ class PonsSolver:
                 self._warn_fallback()
                 return self._analyze_minimax(env)
 
-            return self._parse_pons_batch(result.stdout, legal)
+            scores = self._parse_pons_batch(result.stdout, legal)
+            if not scores:
+                logger.warning("Pons solver returned no parseable scores. Falling back to minimax.")
+                return self._analyze_minimax(env)
+            return scores
         except (subprocess.TimeoutExpired, OSError) as e:
             logger.warning("Pons solver failed: %s. Falling back to minimax.", e)
             return self._analyze_minimax(env)
@@ -152,8 +181,6 @@ class PonsSolver:
                 except ValueError:
                     continue
 
-        if not scores:
-            return self._analyze_minimax(ConnectFourEnv())
         return scores
 
     def _analyze_minimax(self, env: ConnectFourEnv) -> Dict[int, int]:
@@ -200,6 +227,7 @@ class PonsSolver:
                 input=batch_input,
                 capture_output=True,
                 text=True,
+                cwd=str(self._project_root),
                 timeout=60,
             )
             if result.returncode != 0:

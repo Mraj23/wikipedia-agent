@@ -7,9 +7,9 @@ This file exists to keep the repository's experiment status legible while the co
 Use these files in this order when deciding what the current experiment is:
 
 1. `CLAUDE.md`
-2. `results/PRELIMINARY_RESULTS.md`
-3. `results/EVALUATION_BASELINES.md`
-4. `README.md`
+2. `docs/ACTIVE_PROTOCOL.md`
+3. `README.md`
+4. canonical JSON outputs under `results/`
 
 If another script or comment disagrees with those files, assume the script or comment is stale until verified.
 
@@ -17,8 +17,7 @@ If another script or comment disagrees with those files, assume the script or co
 
 Treat these as reportable today:
 
-- Baseline calibration summaries in `results/EVALUATION_BASELINES.md`
-- Baseline calibration logs in `results/calibration_v4/`
+- Canonical evaluation JSONs emitted after the May 1, 2026 cleanup
 - Locked probe positions in `data/probe_positions_locked.jsonl`
 
 Treat these as non-reportable pipeline artifacts unless they are explicitly rerun and documented:
@@ -31,14 +30,21 @@ Treat these as non-reportable pipeline artifacts unless they are explicitly reru
 
 ## Current Repo Reality
 
-The repo currently mixes two workflows:
+The repo now supports one active workflow and one archived history:
 
-- A current instruct-first preliminary workflow centered on `scripts/run_preliminary.sh`
-- An older SFT-first workflow still visible in modules such as `training/sft_train.py`
+- Active: instruct-first RL centered on `scripts/bootstrap_gpu.sh`, `scripts/run_preliminary.sh`, and the canonical eval suite
+- Archived: older mixed-protocol work preserved under `archive/invalidated_2026_05_01/`
 
-Both are useful engineering artifacts, but only the first one matches the current design narrative in `CLAUDE.md`.
+Only the active path matches the current design narrative in `CLAUDE.md`.
 
-The old personal Lambda provisioning and backup helpers have been removed. The stale per-condition shell wrappers have also been removed in favor of `python -m spiral.train` and `scripts/run_preliminary.sh`. These should not be reintroduced unless they are rewritten as thin, documented, credential-free wrappers around the supported flow.
+The repo should remain self-bootstrapping for a fresh GPU machine. If a step is required to train or evaluate and it is not encoded in `scripts/bootstrap_gpu.sh`, `scripts/gpu_env.sh`, or the canonical scripts, treat that as a repo bug.
+
+## External Artifact Policy
+
+- `7x6.book` is tracked in-repo for convenience, and the bootstrap script should restore it if absent.
+- model weights should not be pushed to GitHub
+- solver source should be rebuilt by script when absent
+- reportable outputs should be small JSON artifacts, plots, or markdown generated from those JSONs
 
 ## Naming Guidance
 

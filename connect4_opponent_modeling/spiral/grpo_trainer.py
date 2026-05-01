@@ -176,8 +176,9 @@ class GRPOTrainer:
         elif config.use_wandb and not _WANDB_AVAILABLE:
             logger.warning("use_wandb=True but wandb not installed. pip install wandb")
 
-        # Dynamic temperature — increases when move diversity collapses
-        self._temperature = 0.7
+        # Dynamic temperature — increases when move diversity collapses.
+        # Start slightly lower to improve format validity early in training.
+        self._temperature = 0.5
 
     def train(self) -> None:
         """Run the full GRPO training loop."""
@@ -218,9 +219,10 @@ class GRPOTrainer:
             valid_count = 0
             for resp in completions:
                 parsed = parse_response(resp, self.config.condition)
+                is_valid, _ = validate_response(parsed, self.config.condition, env.legal_moves())
                 move = parsed.get("move")
                 moves_played.append(move)
-                if move is not None:
+                if is_valid:
                     valid_count += 1
                 # Count tokens before <answer> (approximate thinking length)
                 answer_pos = resp.find("<answer>")
@@ -251,7 +253,7 @@ class GRPOTrainer:
                     most_common_col, self._temperature,
                 )
             else:
-                self._temperature = max(0.7, self._temperature - 0.02)
+                self._temperature = max(0.5, self._temperature - 0.02)
 
             # 5. Compute advantages
             advantages = compute_advantages(
@@ -697,9 +699,9 @@ class GRPOTrainer:
                 "move": move_quality, "future": fs_acc,
                 "terminal": terminal,
             }
-            # D also extracts opponent_prediction (same format as E) but
-            # does NOT reward it — the auxiliary signal comes from future_state only.
-            # This equalizes the output format between D and E.
+            # D and E now share the same required output schema. D scores only
+            # the future-state auxiliary field; the opponent prediction is
+            # collected but left unscored in this condition.
 
         elif condition == "E":
             predicted_opp = parsed.get("opponent_prediction")
@@ -845,17 +847,31 @@ class GRPOTrainer:
         model = self.model
 
         def model_fn(prompt: str) -> str:
+            checkpointing_was_disabled = False
+            if hasattr(model, "gradient_checkpointing_disable"):
+                model.gradient_checkpointing_disable()
+                checkpointing_was_disabled = True
+            if hasattr(model, "config"):
+                model.config.use_cache = True
+
+            rendered = self._apply_chat_template(prompt)
             inputs = tokenizer(
-                prompt, return_tensors="pt", truncation=True, max_length=512
+                rendered, return_tensors="pt", truncation=True, max_length=1024
             ).to(device)
-            with torch.no_grad():
-                outputs = model.generate(
-                    **inputs,
-                    max_new_tokens=256,
-                    do_sample=False,
-                    pad_token_id=tokenizer.pad_token_id,
-                )
-            return tokenizer.decode(outputs[0], skip_special_tokens=True)
+            prompt_len = inputs["input_ids"].shape[1]
+            try:
+                with torch.no_grad():
+                    outputs = model.generate(
+                        **inputs,
+                        max_new_tokens=256,
+                        do_sample=False,
+                        pad_token_id=tokenizer.pad_token_id,
+                    )
+            finally:
+                if self.device.type == "cuda" and checkpointing_was_disabled:
+                    model.gradient_checkpointing_enable()
+            completion_tokens = outputs[0][prompt_len:]
+            return tokenizer.decode(completion_tokens, skip_special_tokens=True)
 
         return model_fn
 

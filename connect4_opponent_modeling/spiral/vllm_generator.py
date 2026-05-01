@@ -55,6 +55,7 @@ class VLLMGenerator:
         Returns:
             List of completion strings.
         """
+        self._configure_runtime()
         from vllm import LLM, SamplingParams
 
         if self._engine is None:
@@ -67,7 +68,9 @@ class VLLMGenerator:
             self._engine = LLM(
                 model=self._weights_dir if self._step >= 0 else self._model_path,
                 dtype=self._dtype,
-                gpu_memory_utilization=0.85,
+                gpu_memory_utilization=float(
+                    os.environ.get("C4_VLLM_GPU_MEMORY_UTILIZATION", "0.85")
+                ),
                 enforce_eager=True,
                 max_model_len=1024,
             )
@@ -81,6 +84,13 @@ class VLLMGenerator:
         )
         outputs = self._engine.generate([prompt], params)
         return [out.text for out in outputs[0].outputs]
+
+    @staticmethod
+    def _configure_runtime() -> None:
+        """Apply stable default env vars before importing or initializing vLLM."""
+        if "VLLM_USE_DEEP_GEMM" not in os.environ:
+            os.environ["VLLM_USE_DEEP_GEMM"] = "0"
+            logger.info("Defaulting VLLM_USE_DEEP_GEMM=0 for stable GH200/Hopper bring-up.")
 
     def update_weights(self, model, tokenizer, step: int) -> None:
         """Save training model weights for vLLM to load next time.

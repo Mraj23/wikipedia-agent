@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Run preliminary RL training for conditions C, D, E.
 # Tests the causal ladder: value-only → future-state → opponent modeling.
 #
@@ -15,27 +15,33 @@
 #   tmux attach -t training    # to monitor
 #   # Ctrl+b, d to detach (training continues)
 
-set -e
+set -euo pipefail
 
-# Activate environment
-source ~/c4env/bin/activate 2>/dev/null || true
-cd "$(dirname "$0")/.."
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT_DIR"
+
+if [ -d "$ROOT_DIR/.venv" ]; then
+    # shellcheck disable=SC1091
+    source "$ROOT_DIR/.venv/bin/activate"
+fi
+
+# shellcheck disable=SC1091
+source "$ROOT_DIR/scripts/gpu_env.sh"
 
 MODEL=Qwen/Qwen3-4B
 STEPS=500
 GROUP=64
 SEED=42
 PROJECT=connect4-opponent-modeling
+USE_VLLM=${USE_VLLM:-0}
+
+TRAIN_ARGS=()
+if [ "$USE_VLLM" = "1" ]; then
+    TRAIN_ARGS+=(--use_vllm)
+fi
 
 # Verify GPU
-python -c "import torch; assert torch.cuda.is_available(), 'No GPU found!'"
-
-# Verify position buffer exists
-if [ ! -f data/position_buffer.json ]; then
-    echo "ERROR: Position buffer not found at data/position_buffer.json"
-    echo "Generate it locally first (CPU): python -c 'from spiral.position_buffer import PositionBuffer; b = PositionBuffer(1000, 2); b.save(\"data/position_buffer.json\")'"
-    exit 1
-fi
+python "$ROOT_DIR/scripts/verify_setup.py" --expect-gpu
 
 echo "============================================"
 echo "Preliminary RL Training (Causal Ladder)"
@@ -69,7 +75,8 @@ for COND in C D E; do
         --seed $SEED \
         --wandb \
         --wandb_project $PROJECT \
-        --wandb_run_name $RUN_NAME
+        --wandb_run_name $RUN_NAME \
+        "${TRAIN_ARGS[@]}"
 
     echo ""
     echo "  Condition $COND complete: $(date)"

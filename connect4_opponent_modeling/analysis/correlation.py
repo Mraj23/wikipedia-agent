@@ -1,9 +1,4 @@
-"""Correlation analysis between probe accuracy and transfer performance.
-
-Computes Pearson correlation between mechanistic probe accuracy
-and GTBench win rate to test the hypothesis that opponent modeling
-representations cause transfer.
-"""
+"""Correlation analysis between probe accuracy and ladder transfer performance."""
 
 import argparse
 import json
@@ -30,8 +25,8 @@ def load_all_results(results_dir: str) -> "pd.DataFrame":
         results_dir: Directory containing *_eval_*.json files.
 
     Returns:
-        DataFrame with columns: condition, step, probe_accuracy,
-        gtbench_win_rate, gsm8k_accuracy.
+        DataFrame with columns for probe accuracy, breakthrough transfer score,
+        and optional non-adversarial controls.
 
     Raises:
         ImportError: If pandas is not installed.
@@ -57,14 +52,14 @@ def load_all_results(results_dir: str) -> "pd.DataFrame":
         probe = data.get("probe", {})
         record["probe_accuracy"] = probe.get("overall_accuracy", None)
 
-        # GTBench win rate
-        gtbench = data.get("gtbench", {})
-        if "breakthrough" in gtbench:
-            record["gtbench_win_rate"] = gtbench["breakthrough"].get("win_rate", None)
-        elif "win_rate" in gtbench:
-            record["gtbench_win_rate"] = gtbench.get("win_rate", None)
-        else:
-            record["gtbench_win_rate"] = None
+        transfer_summary = data.get("transfer_summary", {})
+        record["breakthrough_transfer_score"] = transfer_summary.get(
+            "breakthrough_transfer_score", None
+        )
+        record["breakthrough_mcts100_win_rate"] = transfer_summary.get(
+            "breakthrough_mcts-100_win_rate", None
+        )
+        record["nim_transfer_score"] = transfer_summary.get("nim_transfer_score", None)
 
         # GSM8K accuracy
         gsm8k = data.get("gsm8k", {})
@@ -80,7 +75,7 @@ def load_all_results(results_dir: str) -> "pd.DataFrame":
 
 
 def compute_probe_transfer_correlation(df: "pd.DataFrame") -> Dict:
-    """Compute Pearson correlation between probe accuracy and GTBench win rate.
+    """Compute Pearson correlation between probe accuracy and transfer score.
 
     Args:
         df: DataFrame from load_all_results.
@@ -95,7 +90,7 @@ def compute_probe_transfer_correlation(df: "pd.DataFrame") -> Dict:
         raise ImportError("scipy is required. pip install scipy")
 
     # Filter to rows with both values
-    valid = df.dropna(subset=["probe_accuracy", "gtbench_win_rate"])
+    valid = df.dropna(subset=["probe_accuracy", "breakthrough_transfer_score"])
     if len(valid) < 3:
         return {
             "pearson_r": None,
@@ -104,7 +99,10 @@ def compute_probe_transfer_correlation(df: "pd.DataFrame") -> Dict:
             "interpretation": "Insufficient data points (need >= 3)",
         }
 
-    r, p = stats.pearsonr(valid["probe_accuracy"], valid["gtbench_win_rate"])
+    r, p = stats.pearsonr(
+        valid["probe_accuracy"],
+        valid["breakthrough_transfer_score"],
+    )
 
     if p < 0.01:
         sig = "highly significant"
@@ -141,7 +139,14 @@ def print_correlation_table(results_dir: str) -> None:
         return
 
     print("\n=== Results Summary ===\n")
-    print(df[["condition", "probe_accuracy", "gtbench_win_rate", "gsm8k_accuracy"]].to_string(index=False))
+    columns = [
+        "condition",
+        "probe_accuracy",
+        "breakthrough_transfer_score",
+        "breakthrough_mcts100_win_rate",
+        "gsm8k_accuracy",
+    ]
+    print(df[columns].to_string(index=False))
 
     print("\n=== Probe → Transfer Correlation ===\n")
     corr = compute_probe_transfer_correlation(df)

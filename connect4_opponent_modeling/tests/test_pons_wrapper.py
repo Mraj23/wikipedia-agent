@@ -2,6 +2,7 @@
 
 import sys
 from pathlib import Path
+import tempfile
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -16,7 +17,7 @@ def _get_solver():
 
 def test_falls_back_when_binary_absent():
     """No error raised, returns minimax result."""
-    solver = PonsSolver(solver_path="/nonexistent/binary")
+    solver = PonsSolver(solver_path="/nonexistent/binary", fallback_depth=4)
     env = ConnectFourEnv()
     scores = solver.analyze(env)
     assert isinstance(scores, dict)
@@ -25,8 +26,18 @@ def test_falls_back_when_binary_absent():
 
 def test_is_available_false_without_binary():
     """is_available returns False when binary doesn't exist."""
-    solver = PonsSolver(solver_path="/nonexistent/binary")
+    solver = PonsSolver(solver_path="/nonexistent/binary", fallback_depth=4)
     assert not solver.is_available()
+
+
+def test_is_available_false_without_book():
+    """Binary-only setups should not count as available."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        solver_path = Path(tmp_dir) / "connect4_solver"
+        solver_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        solver_path.chmod(0o755)
+        solver = PonsSolver(solver_path=str(solver_path), book_path=str(Path(tmp_dir) / "7x6.book"))
+        assert not solver.is_available()
 
 
 def test_normalize_reward_in_range():

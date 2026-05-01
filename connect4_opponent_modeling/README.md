@@ -1,155 +1,129 @@
 # Connect Four Opponent Modeling
 
-This repository contains the training and evaluation infrastructure for a study of whether explicitly training an LLM to predict an opponent's next move develops adversarial reasoning that transfers beyond Connect Four.
+This repository studies a narrow question:
 
-The current research question, causal ladder, and experimental invariants live in `CLAUDE.md`. This README is the practical entry point for the codebase and reflects the repo's current status as of April 30, 2026.
+**Does explicit opponent-modeling reward in Connect Four RL produce adversarial transfer that exceeds value-only and future-state controls?**
 
-## Current Status
+As of the May 1, 2026 cleanup, the active experiment protocol is intentionally narrower and more defensible than the earlier mixed setup.
 
-- The baseline evaluation pipeline is working for Connect Four, Breakthrough, Nim, and Tic-Tac-Toe.
-- Untrained Qwen3-4B instruct baselines have been measured and summarized in `results/EVALUATION_BASELINES.md`.
-- Prompt-only opponent-modeling did not help in the baseline prompt comparison.
-- The mechanistic probe is implemented in `eval/probe.py`, and probe positions are locked at `data/probe_positions_locked.jsonl`.
-- The main scientific comparison (`C` vs `D` vs `E`) is not complete yet.
-- Earlier RL attempts showed collapse to degenerate play, so current work is focused on stable preliminary training runs and careful bookkeeping.
+## Active Protocol
 
-## Current Experiment Design
+- **Base model:** `Qwen/Qwen3-4B` instruct
+- **No SFT warmup** in the active protocol
+- **Training domain:** Connect Four with OpenSpiel game logic
+- **Oracle / reward source:** Pons solver when available, minimax fallback only where explicitly documented
+- **Main trained conditions:** `C`, `D`, `E`
+- **Prompt-only baseline:** `F`
+- **Primary transfer evaluation:** canonical difficulty ladder, with **Breakthrough** as the main transfer target
+- **Key mechanistic evaluation:** neutral opponent-response probe on locked Connect Four positions
 
-All conditions are described in more detail in `CLAUDE.md`, but the current intended ladder is:
+If you see references elsewhere to `Qwen3-4B-Base`, SFT warmup as the active path, GTBench as the main transfer metric, or GameBench as a live benchmark, treat those as archived or superseded unless they were reintroduced explicitly after this cleanup.
 
-| Label | Name | What it adds |
+## GPU Bring-Up
+
+Fresh GPU machines should be bootstrapped from the repo itself, not by hand:
+
+```bash
+bash scripts/bootstrap_gpu.sh
+source .venv/bin/activate
+source scripts/gpu_env.sh
+python scripts/verify_setup.py --expect-gpu --expect-vllm --expect-wandb
+```
+
+This bootstrap path installs Python dependencies, sets the stable GH200/Hopper `vLLM` defaults, downloads the Pascal Pons `7x6.book`, builds the `connect4_solver`, and verifies that the solver can actually execute from the repo root.
+
+### External Artifact Policy
+
+- Do **not** use Git LFS for the Pascal Pons opening book.
+- Do **not** push model weights to GitHub.
+- `7x6.book` is tracked in this repo for convenience, and `scripts/bootstrap_gpu.sh` will also download it if it is missing on a fresh machine.
+- Checkpoints should live in `checkpoints/` during active work and be published to a model store or artifact system such as W&B artifacts or Hugging Face if you need persistence beyond the machine.
+
+## Conditions
+
+| Condition | Meaning | What changes |
 |---|---|---|
-| A | Instruct baseline | No RL, evaluate pre-existing instruct capabilities |
-| B | Sparse RL | Win/loss optimization pressure |
-| C | Solver-RL (value) | Position evaluation |
-| D | Solver-RL + future-state | Forward projection |
-| E | Solver-RL + opponent modeling | Adversarial projection |
-| F | Prompt-only baseline | Inference-time opponent reasoning without RL |
+| `A` | Instruct baseline | No RL, base prompt |
+| `C` | Value-only RL | Reward for move quality and terminal outcome |
+| `D` | Future-state RL | Shares the `D/E` output schema; rewards future-state accuracy |
+| `E` | Opponent-modeling RL | Shares the `D/E` output schema; rewards opponent-response accuracy |
+| `F` | Prompt-only baseline | No RL, opponent-aware prompting at inference time |
 
-Current reward weights for RL conditions are:
+`D` and `E` are the critical comparison. They should use the same structured output contract and differ only in which auxiliary field is scored. The main claim should only be framed around `E > D`, not `E > base`.
 
-| Condition | Reward weights |
-|---|---|
-| B | sparse terminal only |
-| C | `move=0.67`, `terminal=0.33` |
-| D | `move=0.56`, `future=0.22`, `terminal=0.22` |
-| E | `move=0.56`, `pred=0.22`, `terminal=0.22` |
+## Canonical Evaluation
 
-Format compliance is currently treated as a binary gate rather than a weighted reward component. See `training/grpo_config.py`.
+The source-of-truth evaluation paths are:
 
-## What To Trust
+- [eval/baseline_eval.py](/Users/rajmehta/Documents/GitHub/wikipedia-agent/connect4_opponent_modeling/eval/baseline_eval.py:1)
+- [eval/game_ladder.py](/Users/rajmehta/Documents/GitHub/wikipedia-agent/connect4_opponent_modeling/eval/game_ladder.py:1)
+- [eval/model_loader.py](/Users/rajmehta/Documents/GitHub/wikipedia-agent/connect4_opponent_modeling/eval/model_loader.py:1)
 
-The repository currently contains two partially overlapping execution paths:
+These paths share:
 
-- The current experiment narrative is the instruct-model design in `CLAUDE.md` plus the sequential preliminary runner in `scripts/run_preliminary.sh`.
-- Some legacy modules still assume an SFT checkpoint in `checkpoints/condition_a` and a base-model-first workflow.
+- identical model loading behavior
+- chat template handling
+- completion-only decoding
+- one ladder prompt/parsing policy
+- deterministic eval seed control
+- explicit prompt-style control for `A` vs `F`, with `F` using a richer opponent-aware structured response schema
 
-For now, treat these as the main sources of truth:
+Do not use ad hoc evaluation scripts to produce reportable numbers unless they call into these modules.
 
-- `CLAUDE.md`: experiment design and invariants
-- `results/EVALUATION_BASELINES.md`: reportable baseline numbers
-- `results/PRELIMINARY_RESULTS.md`: project-status summary
-- `docs/BOOKKEEPING.md`: artifact hygiene and reportability rules
+## Recommended Workflow
 
-## Quick Start
-
-Run the fast local checks first:
+### 1. Train
 
 ```bash
-pytest tests/ -v
-python -m env.connect_four_env
-python -m training.minimax
-python -m training.prompts
+bash scripts/bootstrap_gpu.sh
+source .venv/bin/activate
+source scripts/gpu_env.sh
+python -m spiral.train --condition C --model Qwen/Qwen3-4B --game_steps 500 --group_size 64 --wandb
+python -m spiral.train --condition D --model Qwen/Qwen3-4B --game_steps 500 --group_size 64 --wandb
+python -m spiral.train --condition E --model Qwen/Qwen3-4B --game_steps 500 --group_size 64 --wandb
 ```
 
-## Baseline Evaluation
-
-The strongest completed evidence in the repo today is the untrained instruct-model baseline calibration.
-
-Helpful references:
-
-- `results/EVALUATION_BASELINES.md`
-- `results/calibration_v4/`
-- `scripts/calibrate_transfer.py`
-
-Example command:
-
-```bash
-python scripts/calibrate_transfer.py \
-  --model Qwen/Qwen3-4B \
-  --games connect_four breakthrough nim tic_tac_toe \
-  --num_games 10
-```
-
-## Mechanistic Probe
-
-The neutral-prompt opponent-prediction probe is implemented in `eval/probe.py`.
-
-Important invariant:
-
-- `data/probe_positions_locked.jsonl` must not be regenerated casually.
-
-Lock positions once:
-
-```bash
-python -c "from eval.probe import lock_probe_positions; lock_probe_positions('data/pons_benchmark')"
-```
-
-Run the master evaluation suite:
-
-```bash
-python -m eval.baseline_eval \
-  --model checkpoints/condition_e/best \
-  --condition E \
-  --output results/
-```
-
-## Preliminary RL Workflow
-
-The current lightweight preliminary runner uses the instruct checkpoint directly:
+Or use:
 
 ```bash
 bash scripts/run_preliminary.sh
 ```
 
-That script currently:
+### 2. Evaluate
 
-- trains `C`, `D`, and `E` sequentially
-- uses `Qwen/Qwen3-4B`
-- assumes a GPU is available
-- expects `data/position_buffer.json` to exist
+Run the canonical suite:
 
-## Legacy SFT Path
-
-Some repo scripts still point to an older SFT-first workflow. Those files are still useful if you want to inspect that path, but they are not the clearest representation of the current experiment description.
-
-Files in that category include:
-
-- `training/sft_data_gen.py`
-- `training/sft_train.py`
-
-Older per-condition shell wrappers and personal Lambda helper scripts have been removed from the repo. If they are ever needed again, they should be replaced with small, documented, credential-free wrappers around the current supported entry points.
-
-## Project Layout
-
-```text
-connect4_opponent_modeling/
-├── analysis/          # Plotting and correlation analysis
-├── data/              # Benchmarks, locked probes, position buffers
-├── docs/              # Bookkeeping and documentation notes
-├── env/               # Connect Four env and solver wrapper
-├── eval/              # Benchmark and probe runners
-├── results/           # Saved summaries and evaluation artifacts
-├── scripts/           # Training/eval convenience scripts
-├── spiral/            # Main GRPO/SPIRAL training path
-├── tests/             # Unit tests
-└── training/          # Prompts, reward definitions, legacy SFT path
+```bash
+bash scripts/run_all_evals.sh
 ```
 
-## Notes For Future Cleanup
+This evaluates:
 
-- Align the remaining SFT-first scripts with the current instruct-first study, or explicitly archive them.
-- Prefer `python -m spiral.train` and `scripts/run_preliminary.sh` over ad hoc shell wrappers.
-- Keep smoke-test artifacts separate from reportable experiment results.
-- Avoid interpreting placeholder checkpoints or 3-step smoke runs as scientific evidence.
-- Keep deployment and backup helpers out of the research repo unless they are generic, credential-free, and part of the supported workflow.
+- `A` from the instruct checkpoint with base prompts
+- `F` from the same instruct checkpoint with richer opponent-aware structured prompts
+- any available trained checkpoints for `B/C/D/E`
+
+### 3. Inspect Results
+
+```bash
+python -m analysis.correlation --results results/
+python -m analysis.plot_curves --results results/ --output results/
+```
+
+## What Counts As Defensible Evidence
+
+A good result should show all of the following:
+
+1. `E` beats `D` on Breakthrough transfer under the canonical ladder.
+2. `E` beats `D` on the neutral opponent-response probe.
+3. `F` does not erase the need for training.
+4. Improvements are not just validity improvements; raw win-rates, valid-move rates, clean-game win-rates, and invalid-as-loss views are all reported.
+5. Optional controls such as GSM8K / MATH-500 do not suggest generic capability drift is the main story.
+
+## Archived Material
+
+Invalidated or non-canonical material from the pre-cleanup phase is stored under:
+
+- `archive/invalidated_2026_05_01/`
+
+That archive exists for forensic reference, not for reportable experiment claims.

@@ -13,7 +13,7 @@ class GRPOConfig:
 
     Attributes:
         condition: Experimental condition label ('B', 'C', 'D', or 'E').
-        model_path: Path to SFT warmup checkpoint.
+        model_path: Path to the shared starting checkpoint for the condition.
         game_steps: Total training game steps.
         group_size: Number of responses sampled per prompt for GRPO.
         clip_ratio: PPO-style clipping ratio.
@@ -66,7 +66,7 @@ def get_config(
 
     Args:
         condition: One of 'B', 'C', 'D', 'E'.
-        model_path: Path to the SFT warmup checkpoint.
+        model_path: Path to the shared starting checkpoint.
 
     Returns:
         GRPOConfig with condition-appropriate reward weights.

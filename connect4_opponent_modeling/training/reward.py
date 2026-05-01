@@ -14,7 +14,7 @@ from typing import Optional
 
 from env.connect_four_env import ConnectFourEnv
 from env.pons_wrapper import PonsSolver
-from training.prompts import parse_response, REQUIRED_TAGS
+from training.prompts import REQUIRED_TAGS, extract_tag_text, parse_response
 
 
 class RewardCalculator:
@@ -304,17 +304,13 @@ class RewardCalculator:
         required = REQUIRED_TAGS.get(condition, ["reasoning", "answer"])
 
         for tag in required:
-            pattern = rf"<{tag}>.*?</{tag}>"
-            if not re.search(pattern, response, re.DOTALL):
+            if extract_tag_text(response, tag) is None:
                 return 0.0
 
         # Check answer contains a valid integer
-        answer_match = re.search(r"<answer>\s*(\d)\s*</answer>", response)
-        if not answer_match:
-            # Fallback: check <move> for backward compat
-            move_match = re.search(r"<move>\s*(\d)\s*</move>", response)
-            if not move_match:
-                return 0.0
+        answer_text = extract_tag_text(response, "answer")
+        if answer_text is None or re.search(r"\d", answer_text) is None:
+            return 0.0
 
         return 1.0
 
@@ -340,7 +336,7 @@ if __name__ == "__main__":
         env.make_move(col)
 
     # Condition C
-    response_c = "<think>I should block.</think><move>3</move>"
+    response_c = "<reasoning>I should block.</reasoning><answer>3</answer>"
     reward_c = calc.condition_c_reward(env, 3, "ongoing", response_c)
     print(f"Condition C reward: {reward_c:.3f}")
 

@@ -48,8 +48,10 @@ def _load_benchmark_set(filepath: Path) -> List[Dict]:
 
 def run_pons_benchmark(
     model_fn: Callable[[str], str],
+    condition_label: str = "A",
     benchmark_dir: str = "data/pons_benchmark",
     solver: Optional[PonsSolver] = None,
+    seed: int = 42,
 ) -> Dict:
     """Run the in-domain Connect Four benchmark evaluation.
 
@@ -58,8 +60,10 @@ def run_pons_benchmark(
 
     Args:
         model_fn: Function taking a prompt string and returning model output.
+        condition_label: Prompt/parse condition used for model evaluation.
         benchmark_dir: Directory containing benchmark position files.
         solver: PonsSolver instance (created if None).
+        seed: Evaluation RNG seed.
 
     Returns:
         Dict with overall_pct_optimal and by_set breakdown, plus win_rate
@@ -88,6 +92,7 @@ def run_pons_benchmark(
     by_set: Dict[str, float] = {}
     all_correct = 0
     all_total = 0
+    invalid_outputs = 0
 
     for set_name, label in zip(set_names, set_labels):
         # Try various file extensions
@@ -123,10 +128,12 @@ def run_pons_benchmark(
             optimal = solver.best_move(env)
 
             # Get model's move
-            prompt = format_prompt("A", env)
+            prompt = format_prompt(condition_label, env)
             response = model_fn(prompt)
-            parsed = parse_response(response, "A")
+            parsed = parse_response(response, condition_label)
             model_move = parsed.get("move")
+            if model_move is None or model_move not in env.legal_moves():
+                invalid_outputs += 1
 
             if model_move == optimal:
                 correct += 1
@@ -140,12 +147,22 @@ def run_pons_benchmark(
     overall_pct = all_correct / all_total if all_total > 0 else 0.0
 
     # Win rate against minimax at depths 2, 4, 6
-    win_rates = _evaluate_vs_minimax(model_fn, solver, depths=[2, 4, 6], n_games=100)
+    win_rates = _evaluate_vs_minimax(
+        model_fn,
+        solver,
+        condition_label=condition_label,
+        depths=[2, 4, 6],
+        n_games=100,
+        seed=seed,
+    )
 
     return {
         "overall_pct_optimal": overall_pct,
         "by_set": by_set,
         "total_positions": all_total,
+        "invalid_outputs": invalid_outputs,
+        "invalid_output_rate": invalid_outputs / all_total if all_total > 0 else 0.0,
+        "seed": seed,
         "win_rate_vs_minimax": win_rates,
     }
 
@@ -153,16 +170,20 @@ def run_pons_benchmark(
 def _evaluate_vs_minimax(
     model_fn: Callable[[str], str],
     solver: PonsSolver,
+    condition_label: str = "A",
     depths: List[int] = None,
     n_games: int = 100,
+    seed: int = 42,
 ) -> Dict[int, float]:
     """Evaluate model win rate against minimax at various depths.
 
     Args:
         model_fn: Model callable.
         solver: PonsSolver for move parsing validation.
+        condition_label: Prompt/parse condition used for model evaluation.
         depths: Minimax depths to test against.
         n_games: Games per depth level.
+        seed: Evaluation RNG seed.
 
     Returns:
         Dict mapping depth -> win rate.
@@ -170,23 +191,29 @@ def _evaluate_vs_minimax(
     if depths is None:
         depths = [2, 4, 6]
 
+    rng = random.Random(seed)
     win_rates = {}
     for depth in depths:
         opponent = MinimaxSolver(depth=depth)
         wins = 0
+        invalid_games = 0
+        invalid_moves = 0
         for game_idx in range(n_games):
             env = ConnectFourEnv()
             # Alternate who goes first
             model_player = 1 if game_idx % 2 == 0 else 2
+            had_invalid = False
 
             while not env.is_terminal():
                 if env.current_player() == model_player:
-                    prompt = format_prompt("A", env)
+                    prompt = format_prompt(condition_label, env)
                     response = model_fn(prompt)
-                    parsed = parse_response(response, "A")
+                    parsed = parse_response(response, condition_label)
                     move = parsed.get("move")
                     if move is None or move not in env.legal_moves():
-                        move = env.legal_moves()[0]
+                        invalid_moves += 1
+                        had_invalid = True
+                        move = rng.choice(env.legal_moves())
                 else:
                     move = opponent.best_move(env)
                 env.make_move(move)
@@ -194,8 +221,15 @@ def _evaluate_vs_minimax(
             winner = env.winner()
             if winner == model_player:
                 wins += 1
+            if had_invalid:
+                invalid_games += 1
 
-        win_rates[depth] = wins / n_games
+        win_rates[depth] = {
+            "win_rate": wins / n_games,
+            "invalid_games": invalid_games,
+            "invalid_game_rate": invalid_games / n_games,
+            "invalid_moves": invalid_moves,
+        }
     return win_rates
 
 

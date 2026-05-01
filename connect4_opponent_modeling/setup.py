@@ -25,5 +25,13 @@ setup(
         "peft",
         "pandas",
         "scipy",
+        "tensorboard",
     ],
+    extras_require={
+        "gpu": [
+            "bitsandbytes",
+            "vllm",
+            "wandb",
+        ],
+    },
 )
