@@ -23,6 +23,7 @@ logs/
 
 # Solver binary
 connect4_solver
+!7x6.book
 
 # IDE
 .vscode/
@@ -36,3 +37,4 @@ connect4_solver
 # Environment
 .env
 venv/
+.venv/
