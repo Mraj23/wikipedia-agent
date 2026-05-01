@@ -77,6 +77,8 @@ class GRPOTrainer:
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
+        # Check if tokenizer supports chat template (Qwen3, etc.)
+        self._has_chat_template = hasattr(self.tokenizer, "apply_chat_template")
 
         self.model = AutoModelForCausalLM.from_pretrained(
             config.model_path, trust_remote_code=True, dtype=self.dtype
@@ -371,6 +373,22 @@ class GRPOTrainer:
             self._wandb_run.log_artifact(artifact)
             self._wandb_run.finish()
 
+    def _apply_chat_template(self, prompt: str) -> str:
+        """Apply chat template to raw prompt for instruct models.
+
+        This is critical for /no_think to work — without the chat template,
+        /no_think is just literal text and the model ignores it.
+        """
+        if self._has_chat_template:
+            try:
+                messages = [{"role": "user", "content": prompt}]
+                return self.tokenizer.apply_chat_template(
+                    messages, tokenize=False, add_generation_prompt=True
+                )
+            except Exception:
+                pass
+        return prompt
+
     def _generate_group(
         self, prompt: str
     ) -> Tuple[List[str], List[torch.Tensor]]:
@@ -379,7 +397,7 @@ class GRPOTrainer:
         Uses vLLM if available (much faster on GPU), falls back to HF generate().
 
         Args:
-            prompt: The formatted prompt string.
+            prompt: The formatted prompt string (raw, before chat template).
 
         Returns:
             Tuple of (decoded_texts, per_completion_log_probs).
@@ -394,20 +412,23 @@ class GRPOTrainer:
         """Generate completions using vLLM engine."""
         from vllm import SamplingParams
 
+        # Apply chat template for /no_think to work
+        chat_prompt = self._apply_chat_template(prompt)
+
         params = SamplingParams(
             n=self.config.group_size,
             max_tokens=self.config.max_tokens,
             min_tokens=10,
             temperature=self._temperature,
         )
-        outputs = self._vllm_engine.generate([prompt], params)
+        outputs = self._vllm_engine.generate([chat_prompt], params)
         request_output = outputs[0]
 
         completions = []
         log_probs_list = []
 
         prompt_ids = self.tokenizer(
-            prompt, return_tensors="pt", truncation=True, max_length=512
+            chat_prompt, return_tensors="pt", truncation=True, max_length=1024
         )["input_ids"][0].to(self.device)
 
         for completion_output in request_output.outputs:
@@ -438,8 +459,10 @@ class GRPOTrainer:
             self.model.gradient_checkpointing_disable()
             self.model.config.use_cache = True
 
+        # Apply chat template so /no_think is processed correctly
+        chat_prompt = self._apply_chat_template(prompt)
         inputs = self.tokenizer(
-            prompt, return_tensors="pt", truncation=True, max_length=512
+            chat_prompt, return_tensors="pt", truncation=True, max_length=1024
         ).to(self.device)
         prompt_len = inputs["input_ids"].shape[1]
 
@@ -704,8 +727,9 @@ class GRPOTrainer:
             Tuple of (loss_value, mean_kl).
         """
         self.model.train()
+        chat_prompt = self._apply_chat_template(prompt)
         prompt_ids = self.tokenizer(
-            prompt, return_tensors="pt", truncation=True, max_length=512
+            chat_prompt, return_tensors="pt", truncation=True, max_length=1024
         )["input_ids"][0].to(self.device)
 
         total_loss = torch.tensor(0.0, device=self.device, requires_grad=True)

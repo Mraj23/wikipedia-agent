@@ -17,12 +17,14 @@
 - [x] GTBench integration with local HF model adapter
 - [x] Training infrastructure: GRPO with entropy bonus, balanced position buffer, collapse detection, vLLM
 - [x] W&B monitoring integration
+- [x] Mechanistic probe implementation in `eval/probe.py`
+- [x] Probe positions locked in `data/probe_positions_locked.jsonl`
 
 ### What's Not Done
 - [ ] Successful RL training run (previous attempts collapsed to "always play center")
 - [ ] Conditions D and E (the actual experiment)
 - [ ] Transfer evaluation after training
-- [ ] Mechanistic probe (neutral prompt opponent prediction test)
+- [ ] Reportable post-training mechanistic probe comparison for C vs D vs E
 - [ ] GSM8K/MATH-500 non-adversarial control
 
 ---
@@ -50,11 +52,13 @@ Prompting the model to consider opponent responses doesn't help when thinking is
 
 ### 3. Training Collapsed to Mode Exploitation
 
-Condition C (value-only RL) trained for 500 steps. Reward climbed from 0.2 → 0.67, but the model converged to "always play column 3." Pons benchmark: 0%.
+An earlier Condition C (value-only RL) attempt trained for 500 steps. Reward climbed from 0.2 → 0.67, but the model converged to "always play column 3." Pons benchmark: 0%.
 
 Root causes: no entropy regularization, biased position buffer (35% column-3-optimal), no collapse monitoring.
 
-Fixes implemented (untested on GPU): entropy bonus, column-balanced buffer (14% per column), dynamic temperature, diversity monitoring in W&B.
+Fixes are now implemented in the codebase: entropy bonus, column-balanced buffer (14% per column), dynamic temperature, diversity monitoring in W&B.
+
+Bookkeeping note: the repo also contains smoke-test artifacts for Conditions C and E, including placeholder-model probe outputs. Those runs are useful for pipeline validation only and should not be cited as scientific results.
 
 ---
 
@@ -69,7 +73,7 @@ Fixes implemented (untested on GPU): entropy bonus, column-balanced buffer (14% 
 | Collapse detection | Ready | Warns when >80% play same column, auto-increases temperature |
 | Prompt format | Ready | `/no_think` + `<reasoning>/<answer>` tags |
 | Evaluation | Ready | Difficulty ladder, 4 games, detailed JSON logs |
-| Mechanistic probe | Not built | Needs neutral prompt opponent prediction evaluation |
+| Mechanistic probe | Ready | Implemented in `eval/probe.py`; no reportable post-training comparison yet |
 
 ---
 
@@ -90,7 +94,7 @@ Fixes implemented (untested on GPU): entropy bonus, column-balanced buffer (14% 
 2. **Verify no collapse** within first 50 steps via W&B monitoring
 3. **Run conditions C, D, E** sequentially (500 steps each)
 4. **Re-evaluate on difficulty ladder** — compare C vs D vs E on Breakthrough and Connect Four
-5. **Build mechanistic probe** — neutral prompt opponent prediction test
+5. **Run the mechanistic probe after real training** — neutral prompt opponent prediction test for C vs D vs E
 6. **Run non-adversarial controls** — GSM8K, MATH-500
 
 ---
@@ -101,7 +105,6 @@ Fixes implemented (untested on GPU): entropy bonus, column-balanced buffer (14% 
 |---|---|
 | `scripts/calibrate_transfer.py` | Difficulty ladder evaluation |
 | `scripts/run_preliminary.sh` | Chain C → D → E training |
-| `scripts/lambda_setup.sh` | Instance setup |
 | `training/prompts.py` | `/no_think` + `<reasoning>/<answer>` prompt templates |
 | `training/grpo_config.py` | Hyperparameters (entropy_coef=0.01, group_size=64, lr=1e-6) |
 | `spiral/grpo_trainer.py` | GRPO training loop with vLLM, monitoring |
