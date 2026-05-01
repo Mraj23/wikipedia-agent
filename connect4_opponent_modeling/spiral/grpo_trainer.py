@@ -77,6 +77,7 @@ class GRPOTrainer:
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
+        # Check if tokenizer supports chat template (Qwen3, etc.)
         self._has_chat_template = hasattr(self.tokenizer, "apply_chat_template")
 
         self.model = AutoModelForCausalLM.from_pretrained(
@@ -398,10 +399,12 @@ class GRPOTrainer:
             artifact.add_file(str(self.log_dir / "train_log.json"))
             self._wandb_run.log_artifact(artifact)
             self._wandb_run.finish()
-
-
     def _apply_chat_template(self, prompt: str) -> str:
-        """Apply chat template so /no_think is processed correctly."""
+        """Apply chat template to raw prompt for instruct models.
+
+        This is critical for /no_think to work — without the chat template,
+        /no_think is just literal text and the model ignores it.
+        """
         if self._has_chat_template:
             try:
                 messages = [{"role": "user", "content": prompt}]
@@ -420,7 +423,7 @@ class GRPOTrainer:
         Uses vLLM if available (much faster on GPU), falls back to HF generate().
 
         Args:
-            prompt: The formatted prompt string.
+            prompt: The formatted prompt string (raw, before chat template).
 
         Returns:
             Tuple of (decoded_texts, per_completion_log_probs).
@@ -449,9 +452,12 @@ class GRPOTrainer:
         self.ref_model.to("cpu")
         torch.cuda.empty_cache()
 
+        # Apply chat template for /no_think to work
+        chat_prompt = self._apply_chat_template(prompt)
+
         # 2. Generate with vLLM (full GPU)
         completions = self._vllm_gen.generate(
-            prompt=prompt,
+            prompt=chat_prompt,
             n=self.config.group_size,
             max_tokens=self.config.max_tokens,
             min_tokens=10,
@@ -471,7 +477,7 @@ class GRPOTrainer:
         # 5. Compute log-probs under training model (on GPU)
         log_probs_list = []
         prompt_ids = self.tokenizer(
-            prompt, return_tensors="pt", truncation=True, max_length=512
+            chat_prompt, return_tensors="pt", truncation=True, max_length=1024
         )["input_ids"][0].to(self.device)
 
         for text in completions:
@@ -498,6 +504,7 @@ class GRPOTrainer:
             self.model.gradient_checkpointing_disable()
             self.model.config.use_cache = True
 
+        # Apply chat template so /no_think is processed correctly
         chat_prompt = self._apply_chat_template(prompt)
         inputs = self.tokenizer(
             chat_prompt, return_tensors="pt", truncation=True, max_length=1024

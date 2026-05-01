@@ -12,6 +12,8 @@ The hypothesis is not that opponent modeling training improves all reasoning. It
 
 **Base model:** Qwen3-4B (instruct). Instruct model used because the field universally uses instruct models for game evaluation (GTBench, Chess-R1, LLM Chess benchmark). All conditions start from the same instruct checkpoint.
 
+**Repo state note:** the repository still contains some older SFT-first scripts and checkpoints. For the current study narrative, treat this file plus `results/PRELIMINARY_RESULTS.md` and `docs/BOOKKEEPING.md` as the authoritative description of the active experiment.
+
 ## The Causal Ladder
 
 Six conditions where each step adds exactly one cognitive operation. All conditions use the same static solver opponent (Pons/minimax) to keep the opponent constant across conditions.
@@ -93,6 +95,7 @@ A Pearson correlation across conditions and training checkpoints between probe a
 | Model checkpoints | `checkpoints/` |
 | Evaluation results | `results/` |
 | Training logs | `logs/` |
+| Bookkeeping notes | `docs/BOOKKEEPING.md` |
 | Locked probe positions | `data/probe_positions_locked.jsonl` |
 | Position buffer (pre-generated) | `data/position_buffer.json` |
 | Pons benchmark files | `data/pons_benchmark/` |
