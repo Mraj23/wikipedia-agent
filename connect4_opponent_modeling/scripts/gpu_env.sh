@@ -13,5 +13,9 @@ export PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"
 # your environment supports DeepGEMM reliably.
 export VLLM_USE_DEEP_GEMM="${VLLM_USE_DEEP_GEMM:-0}"
 
+# Conservative vLLM reservation that fits more reliably on 40GB cards after
+# the training model has been initialized and offloaded.
+export C4_VLLM_GPU_MEMORY_UTILIZATION="${C4_VLLM_GPU_MEMORY_UTILIZATION:-0.72}"
+
 # Helps reduce allocator fragmentation on long RL runs.
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"

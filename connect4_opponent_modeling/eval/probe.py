@@ -10,6 +10,7 @@ The FileExistsError guard is NOT optional.
 """
 
 import json
+import logging
 import random
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
@@ -18,6 +19,8 @@ import numpy as np
 
 from env.connect_four_env import ConnectFourEnv
 from env.pons_wrapper import PonsSolver
+
+logger = logging.getLogger(__name__)
 
 PROBE_PROMPT = """You are analyzing a Connect Four position.
 
@@ -188,6 +191,8 @@ def run_probe(
     model_fn: Callable[[str], str],
     positions_path: str = "data/probe_positions_locked.jsonl",
     solver: Optional[PonsSolver] = None,
+    max_positions: Optional[int] = None,
+    progress_every: int = 0,
 ) -> Dict:
     """Run the opponent prediction probe.
 
@@ -214,7 +219,10 @@ def run_probe(
     total_correct = 0
     total = 0
 
-    for pos in positions:
+    if max_positions is not None:
+        positions = positions[:max_positions]
+
+    for idx, pos in enumerate(positions, start=1):
         move_seq = pos["moves"]
         cat = pos["depth_category"]
 
@@ -252,6 +260,9 @@ def run_probe(
         results[cat].append(correct)
         total_correct += correct
         total += 1
+
+        if progress_every > 0 and idx % progress_every == 0:
+            logger.info("Probe progress: %d/%d positions", idx, len(positions))
 
     overall_accuracy = total_correct / total if total > 0 else 0.0
     by_depth = {}

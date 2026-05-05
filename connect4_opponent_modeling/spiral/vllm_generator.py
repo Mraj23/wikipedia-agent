@@ -64,13 +64,15 @@ class VLLMGenerator:
             gc.collect()
             torch.cuda.empty_cache()
 
+            gpu_mem_util = float(
+                os.environ.get("C4_VLLM_GPU_MEMORY_UTILIZATION", "0.72")
+            )
             logger.info("Initializing vLLM engine...")
+            logger.info("vLLM gpu_memory_utilization=%s", gpu_mem_util)
             self._engine = LLM(
                 model=self._weights_dir if self._step >= 0 else self._model_path,
                 dtype=self._dtype,
-                gpu_memory_utilization=float(
-                    os.environ.get("C4_VLLM_GPU_MEMORY_UTILIZATION", "0.85")
-                ),
+                gpu_memory_utilization=gpu_mem_util,
                 enforce_eager=True,
                 max_model_len=1024,
             )

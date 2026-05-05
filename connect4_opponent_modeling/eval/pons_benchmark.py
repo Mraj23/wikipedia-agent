@@ -5,14 +5,17 @@ can identify optimal moves at various game phases.
 """
 
 import json
+import logging
 import random
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Sequence
 
 from env.connect_four_env import ConnectFourEnv
 from env.pons_wrapper import PonsSolver
 from training.minimax import MinimaxSolver
 from training.prompts import format_prompt, parse_response
+
+logger = logging.getLogger(__name__)
 
 
 def _load_benchmark_set(filepath: Path) -> List[Dict]:
@@ -52,6 +55,10 @@ def run_pons_benchmark(
     benchmark_dir: str = "data/pons_benchmark",
     solver: Optional[PonsSolver] = None,
     seed: int = 42,
+    minimax_depths: Optional[Sequence[int]] = None,
+    minimax_n_games: int = 100,
+    max_positions_per_set: Optional[int] = None,
+    progress_every: int = 25,
 ) -> Dict:
     """Run the in-domain Connect Four benchmark evaluation.
 
@@ -71,6 +78,11 @@ def run_pons_benchmark(
     """
     if solver is None:
         solver = PonsSolver()
+    if not solver.is_available():
+        raise RuntimeError(
+            "Pons solver unavailable. Benchmark requires connect4_solver + 7x6.book; "
+            "run scripts/bootstrap_gpu.sh before using eval.pons_benchmark."
+        )
 
     bench_path = Path(benchmark_dir)
 
@@ -109,10 +121,13 @@ def run_pons_benchmark(
             continue
 
         positions = _load_benchmark_set(filepath)
+        if max_positions_per_set is not None:
+            positions = positions[:max_positions_per_set]
         correct = 0
         total = 0
 
-        for pos in positions:
+        logger.info("Pons set %s: evaluating %d positions", label, len(positions))
+        for idx, pos in enumerate(positions, start=1):
             move_seq = pos["moves"]
             env = ConnectFourEnv()
             try:
@@ -139,6 +154,14 @@ def run_pons_benchmark(
                 correct += 1
             total += 1
 
+            if progress_every > 0 and idx % progress_every == 0:
+                logger.info(
+                    "Pons set %s progress: %d/%d positions",
+                    label,
+                    idx,
+                    len(positions),
+                )
+
         pct = correct / total if total > 0 else 0.0
         by_set[label] = pct
         all_correct += correct
@@ -151,9 +174,10 @@ def run_pons_benchmark(
         model_fn,
         solver,
         condition_label=condition_label,
-        depths=[2, 4, 6],
-        n_games=100,
+        depths=list(minimax_depths) if minimax_depths is not None else [2, 4, 6],
+        n_games=minimax_n_games,
         seed=seed,
+        progress_every=progress_every,
     )
 
     return {
@@ -174,6 +198,7 @@ def _evaluate_vs_minimax(
     depths: List[int] = None,
     n_games: int = 100,
     seed: int = 42,
+    progress_every: int = 25,
 ) -> Dict[int, float]:
     """Evaluate model win rate against minimax at various depths.
 
@@ -198,6 +223,11 @@ def _evaluate_vs_minimax(
         wins = 0
         invalid_games = 0
         invalid_moves = 0
+        logger.info(
+            "Minimax depth %d: evaluating %d games",
+            depth,
+            n_games,
+        )
         for game_idx in range(n_games):
             env = ConnectFourEnv()
             # Alternate who goes first
@@ -223,6 +253,14 @@ def _evaluate_vs_minimax(
                 wins += 1
             if had_invalid:
                 invalid_games += 1
+
+            if progress_every > 0 and (game_idx + 1) % progress_every == 0:
+                logger.info(
+                    "Minimax depth %d progress: %d/%d games",
+                    depth,
+                    game_idx + 1,
+                    n_games,
+                )
 
         win_rates[depth] = {
             "win_rate": wins / n_games,

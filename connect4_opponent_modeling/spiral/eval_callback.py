@@ -18,6 +18,12 @@ logger = logging.getLogger(__name__)
 class EvalCallback:
     """Runs lightweight evaluation during training and tracks best checkpoint."""
 
+    MIDTRAIN_PONS_POSITIONS_PER_SET = 10
+    MIDTRAIN_MINIMAX_DEPTHS = [2]
+    MIDTRAIN_MINIMAX_GAMES = 6
+    MIDTRAIN_PROBE_POSITIONS = 30
+    MIDTRAIN_PROGRESS_EVERY = 5
+
     def __init__(
         self,
         model_fn_factory: Callable[[], Callable[[str], str]],
@@ -43,6 +49,11 @@ class EvalCallback:
         self._save_fn = save_fn
         self._best_pons_score = -1.0
         self._solver = PonsSolver()
+        if not self._solver.is_available():
+            raise RuntimeError(
+                "Pons solver is required for mid-training evals. "
+                "Run scripts/bootstrap_gpu.sh before training."
+            )
         self._log_dir.mkdir(parents=True, exist_ok=True)
 
     def run(self, step: int) -> Dict:
@@ -63,12 +74,27 @@ class EvalCallback:
             "condition": self._condition,
             "timestamp": datetime.now().isoformat(),
         }
+        logger.info(
+            "Step %d: starting lightweight eval "
+            "(Pons %d/set, minimax depths=%s x %d games, probe %d positions)",
+            step,
+            self.MIDTRAIN_PONS_POSITIONS_PER_SET,
+            self.MIDTRAIN_MINIMAX_DEPTHS,
+            self.MIDTRAIN_MINIMAX_GAMES,
+            self.MIDTRAIN_PROBE_POSITIONS,
+        )
 
         # Pons benchmark (in-domain)
         try:
             from eval.pons_benchmark import run_pons_benchmark
             pons_results = run_pons_benchmark(
-                model_fn, solver=self._solver
+                model_fn,
+                condition_label=self._condition,
+                solver=self._solver,
+                minimax_depths=self.MIDTRAIN_MINIMAX_DEPTHS,
+                minimax_n_games=self.MIDTRAIN_MINIMAX_GAMES,
+                max_positions_per_set=self.MIDTRAIN_PONS_POSITIONS_PER_SET,
+                progress_every=self.MIDTRAIN_PROGRESS_EVERY,
             )
             results["pons_benchmark"] = pons_results
             pons_score = pons_results.get("overall_pct_optimal", 0.0)
@@ -83,7 +109,12 @@ class EvalCallback:
         # Probe (opponent prediction)
         try:
             from eval.probe import run_probe
-            probe_results = run_probe(model_fn, solver=self._solver)
+            probe_results = run_probe(
+                model_fn,
+                solver=self._solver,
+                max_positions=self.MIDTRAIN_PROBE_POSITIONS,
+                progress_every=self.MIDTRAIN_PROGRESS_EVERY,
+            )
             results["probe"] = probe_results
             logger.info(
                 "Step %d: Probe accuracy=%.3f",

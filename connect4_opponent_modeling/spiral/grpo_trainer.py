@@ -12,6 +12,7 @@ Advantage Estimation (RAE/SPIRAL). Each training step:
 import json
 import logging
 import math
+import os
 import random
 import time
 from copy import deepcopy
@@ -127,6 +128,13 @@ class GRPOTrainer:
 
         # Game infrastructure
         self.solver = PonsSolver(fallback_depth=config.opponent_depth)
+        require_pons = os.environ.get("C4_REQUIRE_PONS_SOLVER", "1") != "0"
+        if require_pons and not self.solver.is_available():
+            raise RuntimeError(
+                "Pons solver unavailable. Training is intentionally blocked because "
+                "minimax fallback is too slow for the active experiment. "
+                "Run scripts/bootstrap_gpu.sh or set C4_REQUIRE_PONS_SOLVER=0 to override."
+            )
         self.reward_calc = RewardCalculator(self.solver)
         self.minimax = MinimaxSolver(depth=config.opponent_depth)
 
@@ -172,6 +180,10 @@ class GRPOTrainer:
                 tags=[f"condition_{config.condition}", "grpo", "connect4"],
                 reinit=True,
             )
+            self._wandb_run.define_metric("train/*", step_metric="trainer_step")
+            self._wandb_run.define_metric("reward/*", step_metric="trainer_step")
+            self._wandb_run.define_metric("eval/*", step_metric="trainer_step")
+            self._wandb_run.define_metric("final/*", step_metric="trainer_step")
             logger.info("W&B run initialized: %s", self._wandb_run.url)
         elif config.use_wandb and not _WANDB_AVAILABLE:
             logger.warning("use_wandb=True but wandb not installed. pip install wandb")
@@ -237,7 +249,10 @@ class GRPOTrainer:
             move_counts = Counter(valid_moves)
             unique_moves = len(move_counts)
             valid_pct = valid_count / max(len(completions), 1)
+            invalid_pct = 1.0 - valid_pct
             avg_thinking_tokens = sum(thinking_token_counts) / max(len(thinking_token_counts), 1)
+            zero_reward_count = sum(1 for r in rewards if r == 0.0)
+            zero_reward_pct = zero_reward_count / max(len(rewards), 1)
             if move_counts:
                 most_common_col, most_common_count = move_counts.most_common(1)[0]
                 most_common_pct = most_common_count / max(len(completions), 1)
@@ -284,13 +299,15 @@ class GRPOTrainer:
                 "most_common_pct": most_common_pct,
                 "valid_completions": valid_count,
                 "valid_pct": valid_pct,
+                "invalid_pct": invalid_pct,
                 "avg_thinking_tokens": avg_thinking_tokens,
                 "temperature": self._temperature,
                 "step_time_s": step_time,
+                "zero_reward_pct": zero_reward_pct,
             }
             self._train_log.append(log_entry)
 
-            log_every = 100 if self.config.game_steps > 100 else 1
+            log_every = min(10, max(1, self.config.game_steps // 30))
             if step % log_every == 0:
                 logger.info(
                     "Step %d/%d: loss=%.4f kl=%.4f reward=%.3f [%.3f, %.3f] "
@@ -315,6 +332,7 @@ class GRPOTrainer:
             # W&B per-step logging
             if self._wandb_run is not None:
                 wandb_log = {
+                    "trainer_step": step,
                     "train/loss": loss,
                     "train/kl": kl,
                     "train/reward_mean": log_entry["mean_reward"],
@@ -323,20 +341,47 @@ class GRPOTrainer:
                     "train/step_time_s": step_time,
                     "train/unique_moves": unique_moves,
                     "train/most_common_pct": most_common_pct,
+                    "train/most_common_move": most_common_col,
                     "train/valid_completions": valid_count,
                     "train/valid_pct": valid_pct,
+                    "train/invalid_pct": invalid_pct,
                     "train/avg_thinking_tokens": avg_thinking_tokens,
                     "train/temperature": self._temperature,
+                    "train/zero_reward_pct": zero_reward_pct,
+                    "train/mode_collapse_flag": float(most_common_pct > 0.8),
                 }
                 # Log per-component reward means across the group
                 if reward_components and reward_components[0]:
                     for comp_name in reward_components[0]:
                         comp_vals = [rc.get(comp_name, 0.0) for rc in reward_components]
                         wandb_log[f"reward/{comp_name}_mean"] = sum(comp_vals) / len(comp_vals)
+                        if len(comp_vals) > 1:
+                            wandb_log[f"reward/{comp_name}_std"] = (
+                                torch.tensor(comp_vals, dtype=torch.float32).std().item()
+                            )
                 # Log advantage stats
                 if advantages is not None and advantages.numel() > 0:
                     wandb_log["train/advantage_mean"] = advantages.mean().item()
                     wandb_log["train/advantage_std"] = advantages.std().item()
+                if step == 0 or step % 25 == 0:
+                    sample_response = ""
+                    sample_valid = 0.0
+                    sample_move = -1
+                    for resp in completions:
+                        parsed = parse_response(resp, self.config.condition)
+                        is_valid, _ = validate_response(
+                            parsed, self.config.condition, env.legal_moves()
+                        )
+                        if is_valid:
+                            sample_response = resp[:500]
+                            sample_valid = 1.0
+                            sample_move = parsed.get("move", -1)
+                            break
+                    if not sample_response and completions:
+                        sample_response = completions[0][:500]
+                    wandb_log["samples/sample_completion"] = sample_response
+                    wandb_log["samples/sample_valid"] = sample_valid
+                    wandb_log["samples/sample_move"] = sample_move
                 self._wandb_run.log(wandb_log, step=step)
 
             # 8. Divergence detection
@@ -364,13 +409,23 @@ class GRPOTrainer:
             if step > 0 and step % self.config.eval_every == 0:
                 eval_results = self.eval_callback.run(step)
                 if self._wandb_run is not None:
-                    wandb_eval = {}
+                    wandb_eval = {"trainer_step": step}
                     pons = eval_results.get("pons_benchmark", {})
                     if "overall_pct_optimal" in pons:
                         wandb_eval["eval/pons_pct_optimal"] = pons["overall_pct_optimal"]
+                        wandb_eval["eval/pons_invalid_output_rate"] = pons.get(
+                            "invalid_output_rate", 0.0
+                        )
+                        for depth, stats in pons.get("win_rate_vs_minimax", {}).items():
+                            wandb_eval[f"eval/minimax_{depth}_win_rate"] = stats.get("win_rate", 0.0)
+                            wandb_eval[f"eval/minimax_{depth}_invalid_game_rate"] = stats.get(
+                                "invalid_game_rate", 0.0
+                            )
                     probe = eval_results.get("probe", {})
                     if "overall_accuracy" in probe:
                         wandb_eval["eval/probe_accuracy"] = probe["overall_accuracy"]
+                        for depth_name, acc in probe.get("by_depth", {}).items():
+                            wandb_eval[f"eval/probe_{depth_name}_accuracy"] = acc
                     if wandb_eval:
                         self._wandb_run.log(wandb_eval, step=step)
 
@@ -386,10 +441,16 @@ class GRPOTrainer:
 
         # W&B final logging and cleanup
         if self._wandb_run is not None:
-            wandb_final = {"final/total_steps": self.config.game_steps}
+            wandb_final = {
+                "trainer_step": self.config.game_steps,
+                "final/total_steps": self.config.game_steps,
+            }
             pons = final_eval.get("pons_benchmark", {})
             if "overall_pct_optimal" in pons:
                 wandb_final["final/pons_pct_optimal"] = pons["overall_pct_optimal"]
+                wandb_final["final/pons_invalid_output_rate"] = pons.get(
+                    "invalid_output_rate", 0.0
+                )
             probe = final_eval.get("probe", {})
             if "overall_accuracy" in probe:
                 wandb_final["final/probe_accuracy"] = probe["overall_accuracy"]
@@ -399,6 +460,11 @@ class GRPOTrainer:
                 f"train_log_{self.config.condition.lower()}", type="training_log"
             )
             artifact.add_file(str(self.log_dir / "train_log.json"))
+            for eval_file in sorted(self.log_dir.glob("eval_step_*.json")):
+                artifact.add_file(str(eval_file))
+            config_path = self.log_dir / "config.json"
+            if config_path.exists():
+                artifact.add_file(str(config_path))
             self._wandb_run.log_artifact(artifact)
             self._wandb_run.finish()
     def _apply_chat_template(self, prompt: str) -> str:

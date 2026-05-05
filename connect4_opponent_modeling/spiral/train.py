@@ -43,6 +43,10 @@ def main() -> None:
         help="Override group_size from config (useful for smoke tests)",
     )
     parser.add_argument(
+        "--eval_every", type=int, default=None,
+        help="Override eval_every from config",
+    )
+    parser.add_argument(
         "--seed", type=int, default=None,
         help="Random seed for reproducibility (default: 42)",
     )
@@ -86,6 +90,8 @@ def main() -> None:
         config.game_steps = args.game_steps
     if args.group_size is not None:
         config.group_size = args.group_size
+    if args.eval_every is not None:
+        config.eval_every = args.eval_every
     if args.seed is not None:
         config.seed = args.seed
     if args.use_vllm:
@@ -107,6 +113,7 @@ def main() -> None:
     logger.info("Group size: %d", config.group_size)
     logger.info("KL coef: %f", config.kl_coef)
     logger.info("Clip ratio: %f", config.clip_ratio)
+    logger.info("Eval every: %d", config.eval_every)
     logger.info("Use RAE: %s", config.use_rae)
     logger.info("Reward weights: %s", config.reward_weights)
     logger.info("W&B: %s", "enabled" if config.use_wandb else "disabled")
