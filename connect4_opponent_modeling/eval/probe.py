@@ -208,7 +208,7 @@ def run_probe(
         Dict with overall_accuracy and by_depth breakdown.
     """
     if solver is None:
-        solver = PonsSolver()
+        solver = PonsSolver(strict=True)
 
     positions = []
     with open(positions_path) as f:
@@ -298,7 +298,7 @@ def run_consequence_probe(
         Dict with overall cell accuracy and example comparisons.
     """
     if solver is None:
-        solver = PonsSolver()
+        solver = PonsSolver(strict=True)
 
     positions = []
     with open(positions_path) as f:
