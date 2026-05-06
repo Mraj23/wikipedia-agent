@@ -127,8 +127,8 @@ class GRPOTrainer:
                 logger.warning("vLLM init failed: %s. Using HF generate().", e)
 
         # Game infrastructure
-        self.solver = PonsSolver(fallback_depth=config.opponent_depth)
         require_pons = os.environ.get("C4_REQUIRE_PONS_SOLVER", "1") != "0"
+        self.solver = PonsSolver(fallback_depth=config.opponent_depth, strict=require_pons)
         if require_pons and not self.solver.is_available():
             raise RuntimeError(
                 "Pons solver unavailable. Training is intentionally blocked because "
@@ -929,7 +929,7 @@ class GRPOTrainer:
                 with torch.no_grad():
                     outputs = model.generate(
                         **inputs,
-                        max_new_tokens=256,
+                        max_new_tokens=160,
                         do_sample=False,
                         pad_token_id=tokenizer.pad_token_id,
                     )

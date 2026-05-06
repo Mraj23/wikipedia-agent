@@ -18,9 +18,14 @@ logger = logging.getLogger(__name__)
 class EvalCallback:
     """Runs lightweight evaluation during training and tracks best checkpoint."""
 
+    # Periodic eval uses ONLY the Pons-position benchmark (single-shot inference
+    # per position, scored against the solver) and the probe. The minimax-game
+    # ladder is offline-only — each game requires ~20 model calls and the
+    # in-loop cost grows quadratically with `eval_every`. Pons solver is REQUIRED
+    # and enforced in __init__.
     MIDTRAIN_PONS_POSITIONS_PER_SET = 10
-    MIDTRAIN_MINIMAX_DEPTHS = [2]
-    MIDTRAIN_MINIMAX_GAMES = 6
+    MIDTRAIN_MINIMAX_DEPTHS: list = []  # skip minimax-game ladder mid-training
+    MIDTRAIN_MINIMAX_GAMES = 0
     MIDTRAIN_PROBE_POSITIONS = 30
     MIDTRAIN_PROGRESS_EVERY = 5
 
@@ -48,7 +53,7 @@ class EvalCallback:
         self._checkpoint_dir = Path(checkpoint_dir)
         self._save_fn = save_fn
         self._best_pons_score = -1.0
-        self._solver = PonsSolver()
+        self._solver = PonsSolver(strict=True)
         if not self._solver.is_available():
             raise RuntimeError(
                 "Pons solver is required for mid-training evals. "

@@ -1,6 +1,8 @@
 """Wrapper around the Pons C++ Connect Four solver binary.
 
-Provides automatic fallback to minimax when the binary is not available.
+By default the wrapper can fall back to minimax for development convenience.
+Active experiment paths should use ``strict=True`` so solver failures surface
+immediately instead of silently turning into a much slower evaluation path.
 The Pons solver binary protocol: takes a move sequence string on stdin,
 returns one line of space-separated integers — one score per column.
 """
@@ -15,6 +17,10 @@ from env.connect_four_env import ConnectFourEnv
 from training.minimax import MinimaxSolver
 
 logger = logging.getLogger(__name__)
+
+
+class PonsSolverError(RuntimeError):
+    """Raised when strict Pons solver execution fails."""
 
 
 class PonsSolver:
@@ -33,6 +39,7 @@ class PonsSolver:
         solver_path: str = "./connect4_solver",
         book_path: str = "./7x6.book",
         fallback_depth: int = 8,
+        strict: bool = False,
     ) -> None:
         """Initialize the solver.
 
@@ -40,6 +47,7 @@ class PonsSolver:
             solver_path: Path to the Pons solver binary.
             book_path: Path to the Pascal Pons 7x6 opening book.
             fallback_depth: Minimax depth to use when binary is absent.
+            strict: If True, never fall back to minimax silently.
         """
         # Resolve relative paths from the project root (parent of env/)
         project_root = Path(__file__).resolve().parent.parent
@@ -57,6 +65,7 @@ class PonsSolver:
 
         self._fallback = MinimaxSolver(depth=fallback_depth)
         self._warned_fallback = False
+        self._strict = strict
 
     def is_available(self) -> bool:
         """Check if the Pons solver binary exists and is executable.
@@ -90,6 +99,10 @@ class PonsSolver:
             )
             self._warned_fallback = True
 
+    def _strict_error(self, message: str) -> None:
+        """Raise a strict-mode solver error."""
+        raise PonsSolverError(message)
+
     def analyze(self, env: ConnectFourEnv) -> Dict[int, int]:
         """Analyze the position and return scores per legal column.
 
@@ -104,6 +117,11 @@ class PonsSolver:
         """
         if self.is_available():
             return self._analyze_pons(env)
+        if self._strict:
+            self._strict_error(
+                "Pons solver unavailable. Expected connect4_solver + 7x6.book. "
+                "Run scripts/bootstrap_gpu.sh before training or evaluation."
+            )
         else:
             self._warn_fallback()
             return self._analyze_minimax(env)
@@ -141,16 +159,27 @@ class PonsSolver:
                 timeout=30,
             )
             if result.returncode != 0:
+                if self._strict:
+                    self._strict_error(
+                        f"Pons solver returned error code {result.returncode}: "
+                        f"{result.stderr.strip() or '<no stderr>'}"
+                    )
                 logger.warning("Pons solver returned error: %s", result.stderr.strip())
                 self._warn_fallback()
                 return self._analyze_minimax(env)
 
             scores = self._parse_pons_batch(result.stdout, legal)
             if not scores:
+                if self._strict:
+                    self._strict_error(
+                        "Pons solver returned no parseable scores for a legal position."
+                    )
                 logger.warning("Pons solver returned no parseable scores. Falling back to minimax.")
                 return self._analyze_minimax(env)
             return scores
         except (subprocess.TimeoutExpired, OSError) as e:
+            if self._strict:
+                self._strict_error(f"Pons solver failed during execution: {e}")
             logger.warning("Pons solver failed: %s. Falling back to minimax.", e)
             return self._analyze_minimax(env)
 
@@ -206,7 +235,14 @@ class PonsSolver:
         Returns:
             List of score dicts (same order as envs).
         """
-        if not self.is_available() or not envs:
+        if not envs:
+            return []
+        if not self.is_available():
+            if self._strict:
+                self._strict_error(
+                    "Pons solver unavailable. Expected connect4_solver + 7x6.book. "
+                    "Run scripts/bootstrap_gpu.sh before batched evaluation."
+                )
             return [self.analyze(env) for env in envs]
 
         # Build batch: for each env, one line per legal column
@@ -231,6 +267,11 @@ class PonsSolver:
                 timeout=60,
             )
             if result.returncode != 0:
+                if self._strict:
+                    self._strict_error(
+                        f"Pons batch solver returned error code {result.returncode}: "
+                        f"{result.stderr.strip() or '<no stderr>'}"
+                    )
                 return [self.analyze(env) for env in envs]
 
             out_lines = [l.strip() for l in result.stdout.strip().split("\n") if l.strip()]
@@ -248,10 +289,16 @@ class PonsSolver:
             # Fallback for any env with no scores
             for i, scores in enumerate(results):
                 if not scores:
+                    if self._strict:
+                        self._strict_error(
+                            "Pons batch solver returned no parseable scores for at least one position."
+                        )
                     results[i] = self._analyze_minimax(envs[i])
 
             return results
         except (subprocess.TimeoutExpired, OSError):
+            if self._strict:
+                self._strict_error("Pons batch solver failed during execution.")
             return [self.analyze(env) for env in envs]
 
     def best_move(self, env: ConnectFourEnv) -> int:

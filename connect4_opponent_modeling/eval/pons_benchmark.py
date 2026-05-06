@@ -77,7 +77,7 @@ def run_pons_benchmark(
         against minimax at various depths.
     """
     if solver is None:
-        solver = PonsSolver()
+        solver = PonsSolver(strict=True)
     if not solver.is_available():
         raise RuntimeError(
             "Pons solver unavailable. Benchmark requires connect4_solver + 7x6.book; "
@@ -169,16 +169,22 @@ def run_pons_benchmark(
 
     overall_pct = all_correct / all_total if all_total > 0 else 0.0
 
-    # Win rate against minimax at depths 2, 4, 6
-    win_rates = _evaluate_vs_minimax(
-        model_fn,
-        solver,
-        condition_label=condition_label,
-        depths=list(minimax_depths) if minimax_depths is not None else [2, 4, 6],
-        n_games=minimax_n_games,
-        seed=seed,
-        progress_every=progress_every,
-    )
+    # Win rate against minimax at depths 2, 4, 6.
+    # Skipped entirely when caller passes empty depths or n_games<=0 — periodic
+    # mid-training evals use this path; the full ladder is offline-only.
+    depths_resolved = list(minimax_depths) if minimax_depths is not None else [2, 4, 6]
+    if depths_resolved and minimax_n_games > 0:
+        win_rates = _evaluate_vs_minimax(
+            model_fn,
+            solver,
+            condition_label=condition_label,
+            depths=depths_resolved,
+            n_games=minimax_n_games,
+            seed=seed,
+            progress_every=progress_every,
+        )
+    else:
+        win_rates = {}
 
     return {
         "overall_pct_optimal": overall_pct,

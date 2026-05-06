@@ -3,11 +3,12 @@
 import sys
 from pathlib import Path
 import tempfile
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from env.connect_four_env import ConnectFourEnv
-from env.pons_wrapper import PonsSolver
+from env.pons_wrapper import PonsSolver, PonsSolverError
 
 
 def _get_solver():
@@ -38,6 +39,55 @@ def test_is_available_false_without_book():
         solver_path.chmod(0o755)
         solver = PonsSolver(solver_path=str(solver_path), book_path=str(Path(tmp_dir) / "7x6.book"))
         assert not solver.is_available()
+
+
+def test_strict_raises_when_binary_absent():
+    """Strict mode should fail fast instead of silently falling back."""
+    solver = PonsSolver(solver_path="/nonexistent/binary", fallback_depth=4, strict=True)
+    env = ConnectFourEnv()
+    with pytest.raises(PonsSolverError):
+        solver.analyze(env)
+
+
+def test_strict_raises_on_unparseable_solver_output():
+    """Malformed solver output should be fatal in strict mode."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        solver_path = Path(tmp_dir) / "connect4_solver"
+        solver_path.write_text("#!/bin/sh\necho junk-output\n", encoding="utf-8")
+        solver_path.chmod(0o755)
+        book_path = Path(tmp_dir) / "7x6.book"
+        book_path.write_text("stub", encoding="utf-8")
+
+        solver = PonsSolver(
+            solver_path=str(solver_path),
+            book_path=str(book_path),
+            fallback_depth=4,
+            strict=True,
+        )
+        env = ConnectFourEnv()
+        with pytest.raises(PonsSolverError):
+            solver.analyze(env)
+
+
+def test_nonstrict_still_falls_back_on_unparseable_solver_output():
+    """Development mode keeps the old fallback behavior."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        solver_path = Path(tmp_dir) / "connect4_solver"
+        solver_path.write_text("#!/bin/sh\necho junk-output\n", encoding="utf-8")
+        solver_path.chmod(0o755)
+        book_path = Path(tmp_dir) / "7x6.book"
+        book_path.write_text("stub", encoding="utf-8")
+
+        solver = PonsSolver(
+            solver_path=str(solver_path),
+            book_path=str(book_path),
+            fallback_depth=4,
+            strict=False,
+        )
+        env = ConnectFourEnv()
+        scores = solver.analyze(env)
+        assert isinstance(scores, dict)
+        assert len(scores) > 0
 
 
 def test_normalize_reward_in_range():
@@ -88,5 +138,4 @@ def test_optimal_opponent_response_is_legal():
 
 
 if __name__ == "__main__":
-    import pytest
     pytest.main([__file__, "-v"])
