@@ -48,6 +48,22 @@ def _opponent_reply_quality(
     return _norm_from_scores(reply_scores, predicted_reply)
 
 
+def _reply_job(
+    env: ConnectFourEnv,
+    model_move: Optional[int],
+    predicted_reply: Optional[int],
+) -> Tuple[Optional[ConnectFourEnv], Optional[int], Optional[float]]:
+    if model_move is None or model_move not in env.legal_moves():
+        return None, predicted_reply, 0.0
+
+    next_env = env.copy()
+    next_env.make_move(model_move)
+    if next_env.is_terminal():
+        return None, predicted_reply, None
+
+    return next_env, predicted_reply, None
+
+
 def _load_records(path: Path, max_positions_per_split: Optional[int]) -> List[Dict]:
     counts: Dict[str, int] = {}
     records: List[Dict] = []
@@ -224,6 +240,8 @@ def evaluate(
         )
 
     outputs: List[Dict] = []
+    reply_envs: List[ConnectFourEnv] = []
+    reply_meta: List[Tuple[int, Optional[int]]] = []
     for idx, (rec, env, scores, response, (position_valid, position_reason)) in enumerate(
         zip(records, envs, score_dicts, responses, position_validity), start=1
     ):
@@ -233,11 +251,8 @@ def evaluate(
         move = parsed.get("move")
         answer_valid = move is not None and move in env.legal_moves()
         move_quality = _norm_from_scores(scores, move)
-        opponent_quality = _opponent_reply_quality(
-            solver,
-            env,
-            move if answer_valid else None,
-            parsed.get("opponent_prediction"),
+        reply_env, predicted_reply, opponent_quality = _reply_job(
+            env, move if answer_valid else None, parsed.get("opponent_prediction")
         )
 
         best_moves = [int(col) for col in rec.get("best_moves", [])]
@@ -261,6 +276,17 @@ def evaluate(
                 "response": response[:1000],
             }
         )
+        if reply_env is not None:
+            reply_meta.append((len(outputs) - 1, predicted_reply))
+            reply_envs.append(reply_env)
+
+    if reply_envs:
+        for (output_idx, predicted_reply), reply_scores in zip(
+            reply_meta, solver.analyze_batch(reply_envs)
+        ):
+            outputs[output_idx]["opponent_reply_quality"] = _norm_from_scores(
+                reply_scores, predicted_reply
+            )
 
     by_split = {}
     for split in sorted({row["split"] for row in outputs}):
