@@ -7,7 +7,7 @@ import json
 import statistics
 import sys
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, Tuple
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -61,6 +61,39 @@ def _load_records(path: Path, max_positions_per_split: Optional[int]) -> List[Di
             counts[split] = counts.get(split, 0) + 1
             records.append(rec)
     return records
+
+
+def _validate_bank_record(rec: Dict) -> Tuple[bool, str, Optional[ConnectFourEnv]]:
+    moves = str(rec.get("moves", ""))
+    if any(ch not in "0123456" for ch in moves):
+        return False, "move_sequence_contains_non_column_digit", None
+
+    env = ConnectFourEnv()
+    try:
+        env.from_move_sequence([int(ch) for ch in moves])
+    except ValueError as exc:
+        return False, f"illegal_move_sequence: {exc}", None
+
+    if env.to_move_sequence() != moves:
+        return False, "move_sequence_replay_mismatch", None
+    if rec.get("move_count") is not None and int(rec["move_count"]) != len(moves):
+        return False, "move_count_mismatch", None
+    if env.is_terminal():
+        return False, "terminal_position", None
+    if len(env.legal_moves()) < 2:
+        return False, "fewer_than_two_legal_moves", None
+
+    legal_moves = sorted(env.legal_moves())
+    if "legal_moves" in rec and sorted(int(col) for col in rec["legal_moves"]) != legal_moves:
+        return False, "legal_moves_mismatch", None
+    if "scores" in rec and sorted(int(col) for col in rec["scores"].keys()) != legal_moves:
+        return False, "score_keys_mismatch", None
+    if "best_moves" in rec:
+        best_moves = {int(col) for col in rec["best_moves"]}
+        if not best_moves.issubset(set(legal_moves)):
+            return False, "best_move_not_legal", None
+
+    return True, "ok", env
 
 
 def _mean(values: Iterable[float]) -> float:
@@ -157,10 +190,16 @@ def evaluate(
     prompts: List[str] = []
     envs: List[ConnectFourEnv] = []
     score_dicts: List[Dict[int, int]] = []
+    position_validity: List[Tuple[bool, str]] = []
 
     for rec in records:
-        env = ConnectFourEnv()
-        env.from_move_sequence([int(c) for c in rec["moves"]])
+        position_valid, position_reason, env = _validate_bank_record(rec)
+        position_validity.append((position_valid, position_reason))
+        if not position_valid or env is None:
+            raise RuntimeError(
+                f"Invalid bank position {rec.get('split', 'unknown')}:{rec.get('moves')}: "
+                f"{position_reason}"
+            )
         envs.append(env)
         score_dicts.append({int(col): int(score) for col, score in rec["scores"].items()})
         prompts.append(format_prompt(condition, env))
@@ -185,8 +224,8 @@ def evaluate(
         )
 
     outputs: List[Dict] = []
-    for idx, (rec, env, scores, response) in enumerate(
-        zip(records, envs, score_dicts, responses), start=1
+    for idx, (rec, env, scores, response, (position_valid, position_reason)) in enumerate(
+        zip(records, envs, score_dicts, responses, position_validity), start=1
     ):
         parsed = parse_response(response, condition)
         schema_valid, schema_reason = validate_response(parsed, condition, env.legal_moves())
@@ -208,6 +247,8 @@ def evaluate(
                 "split": rec.get("split", "unknown"),
                 "moves": rec["moves"],
                 "move_count": rec.get("move_count"),
+                "position_valid": position_valid,
+                "position_validity_reason": position_reason,
                 "score_spread": rec.get("score_spread"),
                 "model_move": move,
                 "answer_valid": answer_valid,
@@ -227,6 +268,8 @@ def evaluate(
         opp_rows = [row for row in rows if row["opponent_reply_quality"] is not None]
         by_split[split] = {
             "n": len(rows),
+            "position_valid_rate": _mean(float(row["position_valid"]) for row in rows),
+            "position_invalid_count": sum(1 for row in rows if not row["position_valid"]),
             "mean_move_quality": _mean(row["move_quality"] for row in rows),
             "pct_optimal": _mean(float(row["optimal"]) for row in rows),
             "answer_valid_rate": _mean(float(row["answer_valid"]) for row in rows),
@@ -246,6 +289,8 @@ def evaluate(
         "temperature": temperature,
         "generation_backend": "vllm" if use_vllm else "hf",
         "total": len(outputs),
+        "position_valid_rate": _mean(float(row["position_valid"]) for row in outputs),
+        "position_invalid_count": sum(1 for row in outputs if not row["position_valid"]),
         "by_split": by_split,
         "primary_mean_move_quality": _mean(
             item["mean_move_quality"] for item in by_split.values()

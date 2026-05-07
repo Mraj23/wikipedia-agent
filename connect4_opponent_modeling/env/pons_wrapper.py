@@ -33,6 +33,9 @@ class PonsSolver:
 
     # Sentinel value for illegal columns in Pons output
     ILLEGAL_SENTINEL = -1000
+    TERMINAL_WIN_SCORE = 1000
+    TERMINAL_DRAW_SCORE = 0
+    TERMINAL_LOSS_SCORE = -1000
 
     def __init__(
         self,
@@ -103,6 +106,15 @@ class PonsSolver:
         """Raise a strict-mode solver error."""
         raise PonsSolverError(message)
 
+    def _terminal_score_after_move(self, env_after_move: ConnectFourEnv, player: int) -> int:
+        """Score a terminal child without asking Pons to analyze a finished game."""
+        outcome = env_after_move.returns()[player - 1]
+        if outcome > 0:
+            return self.TERMINAL_WIN_SCORE
+        if outcome < 0:
+            return self.TERMINAL_LOSS_SCORE
+        return self.TERMINAL_DRAW_SCORE
+
     def analyze(self, env: ConnectFourEnv) -> Dict[int, int]:
         """Analyze the position and return scores per legal column.
 
@@ -142,11 +154,25 @@ class PonsSolver:
         # Convert 0-indexed to 1-indexed for the Pons binary
         base = "".join(str(int(c) + 1) for c in move_seq)
         legal = env.legal_moves()
+        current_player = env.current_player()
 
-        # Build batch input: one line per legal column
+        # Build batch input for non-terminal child positions. Pons does not emit
+        # ordinary scores for finished games, so terminal children are scored here.
+        scores: Dict[int, int] = {}
         lines = []
+        pending_cols = []
         for col in legal:
-            lines.append(base + str(col + 1))
+            next_env = env.copy()
+            next_env.make_move(col)
+            if next_env.is_terminal():
+                scores[col] = self._terminal_score_after_move(next_env, current_player)
+            else:
+                lines.append(base + str(col + 1))
+                pending_cols.append(col)
+
+        if not lines:
+            return scores
+
         batch_input = "\n".join(lines) + "\n"
 
         try:
@@ -168,13 +194,20 @@ class PonsSolver:
                 self._warn_fallback()
                 return self._analyze_minimax(env)
 
-            scores = self._parse_pons_batch(result.stdout, legal)
-            if not scores:
+            parsed = self._parse_pons_batch(result.stdout, pending_cols)
+            scores.update(parsed)
+            if set(scores) != set(legal):
+                missing = sorted(set(legal) - set(scores))
                 if self._strict:
                     self._strict_error(
-                        "Pons solver returned no parseable scores for a legal position."
+                        f"Pons solver returned incomplete scores for a legal position. "
+                        f"Missing columns: {missing}"
                     )
-                logger.warning("Pons solver returned no parseable scores. Falling back to minimax.")
+                logger.warning(
+                    "Pons solver returned incomplete scores. Falling back to minimax. "
+                    "Missing columns: %s",
+                    missing,
+                )
                 return self._analyze_minimax(env)
             return scores
         except (subprocess.TimeoutExpired, OSError) as e:
@@ -245,15 +278,25 @@ class PonsSolver:
                 )
             return [self.analyze(env) for env in envs]
 
-        # Build batch: for each env, one line per legal column
+        # Build batch: for each env, one line per non-terminal legal child.
         all_lines = []
         env_col_map = []  # (env_idx, col) for each line
+        results = [{} for _ in envs]
         for i, env in enumerate(envs):
             move_seq = env.to_move_sequence()
             base = "".join(str(int(c) + 1) for c in move_seq)
+            current_player = env.current_player()
             for col in env.legal_moves():
-                all_lines.append(base + str(col + 1))
-                env_col_map.append((i, col))
+                next_env = env.copy()
+                next_env.make_move(col)
+                if next_env.is_terminal():
+                    results[i][col] = self._terminal_score_after_move(next_env, current_player)
+                else:
+                    all_lines.append(base + str(col + 1))
+                    env_col_map.append((i, col))
+
+        if not all_lines:
+            return results
 
         batch_input = "\n".join(all_lines) + "\n"
 
@@ -276,8 +319,15 @@ class PonsSolver:
 
             out_lines = [l.strip() for l in result.stdout.strip().split("\n") if l.strip()]
 
-            # Parse into per-env score dicts
-            results = [{} for _ in envs]
+            if len(out_lines) != len(env_col_map):
+                if self._strict:
+                    self._strict_error(
+                        f"Pons batch solver returned {len(out_lines)} rows for "
+                        f"{len(env_col_map)} requested non-terminal child positions."
+                    )
+                return [self._analyze_minimax(env) for env in envs]
+
+            # Parse into per-env score dicts.
             for (env_idx, col), line in zip(env_col_map, out_lines):
                 parts = line.split()
                 if len(parts) >= 2:
@@ -286,12 +336,14 @@ class PonsSolver:
                     except ValueError:
                         pass
 
-            # Fallback for any env with no scores
+            # Fallback for any env with incomplete scores.
             for i, scores in enumerate(results):
-                if not scores:
+                missing = set(envs[i].legal_moves()) - set(scores)
+                if missing:
                     if self._strict:
                         self._strict_error(
-                            "Pons batch solver returned no parseable scores for at least one position."
+                            "Pons batch solver returned incomplete scores for at least one "
+                            f"position. Missing columns: {sorted(missing)}"
                         )
                     results[i] = self._analyze_minimax(envs[i])
 

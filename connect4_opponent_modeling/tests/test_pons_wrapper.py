@@ -16,6 +16,24 @@ def _get_solver():
     return PonsSolver(fallback_depth=4)
 
 
+def _make_echo_solver(tmp_path):
+    input_log = tmp_path / "solver_input.txt"
+    solver_path = tmp_path / "connect4_solver"
+    solver_path.write_text(
+        f"""#!/bin/sh
+cat > "{input_log}"
+while IFS= read -r line; do
+  echo "$line 0"
+done < "{input_log}"
+""",
+        encoding="utf-8",
+    )
+    solver_path.chmod(0o755)
+    book_path = tmp_path / "7x6.book"
+    book_path.write_text("stub", encoding="utf-8")
+    return solver_path, book_path, input_log
+
+
 def test_falls_back_when_binary_absent():
     """No error raised, returns minimax result."""
     solver = PonsSolver(solver_path="/nonexistent/binary", fallback_depth=4)
@@ -120,6 +138,50 @@ def test_analyze_returns_legal_cols_only():
     legal = set(env.legal_moves())
     for col in scores:
         assert col in legal, f"Column {col} not in legal moves {legal}"
+
+
+def test_pons_analyze_scores_terminal_children_without_solver_input(tmp_path):
+    """Immediate winning children should not be sent to Pons as unfinished states."""
+    solver_path, book_path, input_log = _make_echo_solver(tmp_path)
+    solver = PonsSolver(
+        solver_path=str(solver_path),
+        book_path=str(book_path),
+        fallback_depth=4,
+        strict=True,
+    )
+    env = ConnectFourEnv()
+    env.from_move_sequence([int(ch) for ch in "306345344510533"])
+
+    terminal_col = 6
+    next_env = env.copy()
+    next_env.make_move(terminal_col)
+    assert next_env.is_terminal()
+
+    scores = solver.analyze(env)
+
+    assert set(scores) == set(env.legal_moves())
+    assert scores[terminal_col] == PonsSolver.TERMINAL_WIN_SCORE
+
+    pons_base = "".join(str(int(ch) + 1) for ch in env.to_move_sequence())
+    assert pons_base + str(terminal_col + 1) not in input_log.read_text().splitlines()
+
+
+def test_pons_batch_scores_terminal_children(tmp_path):
+    """Batched analysis should also preserve all legal columns around terminal children."""
+    solver_path, book_path, _ = _make_echo_solver(tmp_path)
+    solver = PonsSolver(
+        solver_path=str(solver_path),
+        book_path=str(book_path),
+        fallback_depth=4,
+        strict=True,
+    )
+    env = ConnectFourEnv()
+    env.from_move_sequence([int(ch) for ch in "306345344510533"])
+
+    scores = solver.analyze_batch([env])[0]
+
+    assert set(scores) == set(env.legal_moves())
+    assert scores[6] == PonsSolver.TERMINAL_WIN_SCORE
 
 
 def test_optimal_opponent_response_is_legal():
