@@ -31,6 +31,30 @@ difference is which reward components are scored:
 <answer>your move</answer>
 ```
 
+This is intentional for the narrow causal test. If the prompts differed, an
+`OpponentNextMove` gain could come from the extra opponent-facing prompt text
+rather than from the opponent-prediction reward itself.
+
+## Deferred Baseline
+
+Add `ValueAnswerOnly` after the narrow run if compute allows:
+
+| Condition | Training | Purpose |
+|---|---|---|
+| `ValueAnswerOnly` | `1.0 * move_quality` with no opponent-prediction field | Practical value-only recipe baseline |
+
+The answer-only scaffold should be:
+
+```text
+<reasoning>...</reasoning>
+<answer>your move</answer>
+```
+
+This is not the primary causal comparison because it changes both the reward
+and the prompt/schema. It answers a different but useful question: whether the
+opponent-prediction scaffold plus reward is better than the simplest value-only
+training recipe.
+
 ## Primary Metric
 
 For a held-out state `s`, Pons scores every legal move. If the model chooses
