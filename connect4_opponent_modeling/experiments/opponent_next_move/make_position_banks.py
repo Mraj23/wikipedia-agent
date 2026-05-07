@@ -24,17 +24,16 @@ from env.connect_four_env import ConnectFourEnv
 from env.pons_wrapper import PonsSolver
 
 
-def _sample_position(rng: random.Random, solver: PonsSolver) -> Optional[ConnectFourEnv]:
+def _sample_position(rng: random.Random) -> Optional[ConnectFourEnv]:
     env = ConnectFourEnv()
     target_len = rng.randint(4, 30)
 
     for _ in range(target_len):
         if env.is_terminal() or not env.legal_moves():
             break
-        if rng.random() < 0.35:
-            move = solver.best_move(env)
-        else:
-            move = rng.choice(env.legal_moves())
+        # Sampling should be cheap: Pons is reserved for scoring candidate
+        # positions, not generating every intermediate self-play move.
+        move = rng.choice(env.legal_moves())
         env.make_move(move)
 
     if env.is_terminal() or len(env.legal_moves()) < 2:
@@ -85,7 +84,7 @@ def build_banks(
     attempts = 0
     while (len(iid) < n_iid or len(hard) < n_hard) and attempts < max_attempts:
         attempts += 1
-        env = _sample_position(rng, solver)
+        env = _sample_position(rng)
         if env is None:
             continue
 
