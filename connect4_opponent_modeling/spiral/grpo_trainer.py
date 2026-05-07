@@ -839,18 +839,23 @@ class GRPOTrainer:
             chat_prompt, return_tensors="pt", truncation=True, max_length=2048
         )["input_ids"][0].to(self.device)
 
-        total_loss = torch.tensor(0.0, device=self.device, requires_grad=True)
-        total_kl = 0.0
-        n_valid = 0
-
+        valid_items = []
         for i, completion in enumerate(completions):
             gen_ids = self.tokenizer(
                 completion, return_tensors="pt", add_special_tokens=False
             )["input_ids"][0].to(self.device)
+            if gen_ids.numel() > 0:
+                valid_items.append((i, gen_ids))
 
-            if gen_ids.numel() == 0:
-                continue
+        if not valid_items:
+            return 0.0, 0.0
 
+        self.optimizer.zero_grad()
+        total_loss_value = 0.0
+        total_kl = 0.0
+        n_valid = len(valid_items)
+
+        for i, gen_ids in valid_items:
             # Current policy log-probs (with grad)
             full_ids = torch.cat([prompt_ids, gen_ids]).unsqueeze(0)
             logits = self.model(full_ids).logits[0]
@@ -903,18 +908,12 @@ class GRPOTrainer:
                 + self.config.kl_coef * kl
                 - self.config.entropy_coef * entropy
             )
-            total_loss = total_loss + completion_loss
-            n_valid += 1
+            total_loss_value += completion_loss.detach().item()
+            (completion_loss / n_valid).backward()
 
-        if n_valid > 0:
-            avg_loss = total_loss / n_valid
-            self.optimizer.zero_grad()
-            avg_loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-            self.optimizer.step()
-            return avg_loss.item(), total_kl / n_valid
-        else:
-            return 0.0, 0.0
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+        self.optimizer.step()
+        return total_loss_value / n_valid, total_kl / n_valid
 
     def _make_model_fn(self) -> Callable[[str], str]:
         """Create a model inference callable for evaluation.
