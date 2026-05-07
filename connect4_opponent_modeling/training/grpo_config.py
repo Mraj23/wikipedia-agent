@@ -34,7 +34,7 @@ class GRPOConfig:
     kl_coef: float = 0.001
     entropy_coef: float = 0.01
     lr: float = 1e-6
-    max_tokens: int = 256
+    max_tokens: int = 500
     eval_every: int = 1000
     opponent_depth: int = 6
     use_rae: bool = True
@@ -44,6 +44,7 @@ class GRPOConfig:
     use_wandb: bool = False
     wandb_project: str = "connect4-opponent-modeling"
     wandb_run_name: Optional[str] = None
+    checkpoint_dir: Optional[str] = None
 
 
 # Condition-specific reward weight presets
@@ -56,6 +57,8 @@ _REWARD_WEIGHTS: Dict[str, Dict[str, float]] = {
     "D": {"move": 0.56, "future": 0.22, "terminal": 0.22},
     "E": {"move": 0.56, "pred": 0.22, "terminal": 0.22},
     "G": {"move": 0.56, "count": 0.22, "terminal": 0.22},
+    "Value": {"move": 1.0},
+    "OpponentNextMove": {"move": 0.8, "pred": 0.2},
 }
 
 

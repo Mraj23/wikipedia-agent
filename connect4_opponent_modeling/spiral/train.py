@@ -19,8 +19,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--condition", type=str, required=True,
-        choices=["B", "C", "D", "E", "G"],
-        help="Experimental condition (B, C, D, E, or G)",
+        choices=["B", "C", "D", "E", "G", "Value", "OpponentNextMove"],
+        help="Experimental condition (B, C, D, E, G, Value, or OpponentNextMove)",
     )
     parser.add_argument(
         "--model", type=str, default="Qwen/Qwen3-4B",
@@ -45,6 +45,14 @@ def main() -> None:
     parser.add_argument(
         "--eval_every", type=int, default=None,
         help="Override eval_every from config",
+    )
+    parser.add_argument(
+        "--max_tokens", type=int, default=None,
+        help="Override max generation tokens from config",
+    )
+    parser.add_argument(
+        "--checkpoint_dir", type=str, default=None,
+        help="Directory for final/best checkpoints",
     )
     parser.add_argument(
         "--seed", type=int, default=None,
@@ -92,6 +100,10 @@ def main() -> None:
         config.group_size = args.group_size
     if args.eval_every is not None:
         config.eval_every = args.eval_every
+    if args.max_tokens is not None:
+        config.max_tokens = args.max_tokens
+    if args.checkpoint_dir is not None:
+        config.checkpoint_dir = args.checkpoint_dir
     if args.seed is not None:
         config.seed = args.seed
     if args.use_vllm:

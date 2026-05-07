@@ -11,7 +11,19 @@ from training.prompts import CONDITION_PROMPTS, format_prompt, parse_response, v
 
 def test_all_conditions_have_prompts():
     """All active conditions should have prompt templates."""
-    for cond in ["A", "B", "C", "D", "E", "F", "G"]:
+    for cond in [
+        "A",
+        "B",
+        "C",
+        "D",
+        "E",
+        "F",
+        "G",
+        "BaseSimple",
+        "BaseScaffold",
+        "Value",
+        "OpponentNextMove",
+    ]:
         assert cond in CONDITION_PROMPTS, f"Missing prompt for condition {cond}"
 
 
@@ -67,6 +79,18 @@ def test_parse_response_condition_e():
     parsed = parse_response(resp, "E")
     assert parsed["move"] == 3
     assert parsed["future_state"] is not None
+    assert parsed["opponent_prediction"] == 4
+
+
+def test_parse_response_opponent_next_move():
+    """Extracts the narrow-experiment scaffold fields."""
+    resp = (
+        "<reasoning>If I play 3, opponent's best next move is 4.</reasoning>"
+        "<opponent_prediction>4</opponent_prediction>"
+        "<answer>3</answer>"
+    )
+    parsed = parse_response(resp, "OpponentNextMove")
+    assert parsed["move"] == 3
     assert parsed["opponent_prediction"] == 4
 
 

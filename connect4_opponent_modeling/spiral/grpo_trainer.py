@@ -155,7 +155,9 @@ class GRPOTrainer:
         logger.info("Position buffer ready (%d positions)", len(self.position_buffer))
 
         # Eval callback
-        self.checkpoint_dir = Path(f"checkpoints/condition_{config.condition.lower()}")
+        self.checkpoint_dir = Path(
+            config.checkpoint_dir or f"checkpoints/condition_{config.condition.lower()}"
+        )
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         self.eval_callback = EvalCallback(
             model_fn_factory=self._make_model_fn,
@@ -545,7 +547,7 @@ class GRPOTrainer:
         # 5. Compute log-probs under training model (on GPU)
         log_probs_list = []
         prompt_ids = self.tokenizer(
-            chat_prompt, return_tensors="pt", truncation=True, max_length=1024
+            chat_prompt, return_tensors="pt", truncation=True, max_length=2048
         )["input_ids"][0].to(self.device)
 
         for text in completions:
@@ -575,7 +577,7 @@ class GRPOTrainer:
         # Apply chat template so /no_think is processed correctly
         chat_prompt = self._apply_chat_template(prompt)
         inputs = self.tokenizer(
-            chat_prompt, return_tensors="pt", truncation=True, max_length=1024
+            chat_prompt, return_tensors="pt", truncation=True, max_length=2048
         ).to(self.device)
         prompt_len = inputs["input_ids"].shape[1]
 
@@ -755,6 +757,10 @@ class GRPOTrainer:
             )
             comp = {"move": move_quality, "terminal": terminal}
 
+        elif condition == "Value":
+            reward = move_quality
+            comp = {"move": move_quality}
+
         elif condition == "D":
             reward = self.reward_calc.condition_d_reward(
                 env, played_col, game_result, response
@@ -781,6 +787,15 @@ class GRPOTrainer:
                 "move": move_quality, "pred": pred_acc,
                 "terminal": terminal,
             }
+
+        elif condition == "OpponentNextMove":
+            predicted_opp = parsed.get("opponent_prediction")
+            if predicted_opp is None:
+                predicted_opp = -1
+            pred_acc = self.reward_calc._prediction_accuracy(env, played_col, predicted_opp)
+            weights = self.config.reward_weights or {"move": 0.8, "pred": 0.2}
+            comp = {"move": move_quality, "pred": pred_acc}
+            reward = sum(weights.get(name, 0.0) * value for name, value in comp.items())
 
         elif condition == "G":
             predicted_count = parsed.get("piece_count")
@@ -821,7 +836,7 @@ class GRPOTrainer:
         self.model.train()
         chat_prompt = self._apply_chat_template(prompt)
         prompt_ids = self.tokenizer(
-            chat_prompt, return_tensors="pt", truncation=True, max_length=1024
+            chat_prompt, return_tensors="pt", truncation=True, max_length=2048
         )["input_ids"][0].to(self.device)
 
         total_loss = torch.tensor(0.0, device=self.device, requires_grad=True)
@@ -922,14 +937,14 @@ class GRPOTrainer:
 
             rendered = self._apply_chat_template(prompt)
             inputs = tokenizer(
-                rendered, return_tensors="pt", truncation=True, max_length=1024
+                rendered, return_tensors="pt", truncation=True, max_length=2048
             ).to(device)
             prompt_len = inputs["input_ids"].shape[1]
             try:
                 with torch.no_grad():
                     outputs = model.generate(
                         **inputs,
-                        max_new_tokens=160,
+                        max_new_tokens=500,
                         do_sample=False,
                         pad_token_id=tokenizer.pad_token_id,
                     )

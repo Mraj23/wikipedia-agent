@@ -27,87 +27,86 @@ SYSTEM_PROMPT = "You are playing Connect Four. Think carefully before each move.
 #   E: auxiliary reward on opponent-response prediction
 #   F: Same as E but inference-time only (no RL training)
 
-CONDITION_PROMPTS: Dict[str, str] = {
-    "A": (
-        "Connect Four. You are X. Your opponent is O. Drop into column 0-6. Get 4 in a row to win.\n\n"
-        "Board:\n{board}\n\n"
-        "Legal columns: {legal_moves}\n\n"
-        "Respond in this exact format:\n"
-        "<reasoning>One short sentence.</reasoning>\n"
-        "<answer>single_digit_column</answer>\n\n"
-        "/no_think"
-    ),
-    "B": (
-        "Connect Four. You are X. Your opponent is O. Drop into column 0-6. Get 4 in a row to win.\n\n"
-        "Board:\n{board}\n\n"
-        "Legal columns: {legal_moves}\n\n"
-        "Respond in this exact format:\n"
-        "<reasoning>One short sentence.</reasoning>\n"
-        "<answer>single_digit_column</answer>\n\n"
-        "/no_think"
-    ),
-    "C": (
-        "Connect Four. You are X. Your opponent is O. Drop into column 0-6. Get 4 in a row to win.\n\n"
-        "Board:\n{board}\n\n"
-        "Legal columns: {legal_moves}\n\n"
-        "Respond in this exact format:\n"
-        "<reasoning>One or two short sentences about the best move.</reasoning>\n"
-        "<answer>single_digit_column</answer>\n\n"
-        "/no_think"
-    ),
-    "D": (
-        "Connect Four. You are X. Your opponent is O. Drop into column 0-6. Get 4 in a row to win.\n\n"
-        "Board:\n{board}\n\n"
-        "Legal columns: {legal_moves}\n\n"
-        "Respond in this exact format:\n"
-        "<reasoning>One or two short sentences about the best move.</reasoning>\n"
-        "<future_state>Six board rows only, using X O .</future_state>\n"
-        "<opponent_prediction>single_digit_column</opponent_prediction>\n"
-        "<answer>single_digit_column</answer>\n\n"
-        "/no_think"
-    ),
-    "E": (
-        "Connect Four. You are X. Your opponent is O. Drop into column 0-6. Get 4 in a row to win.\n\n"
-        "Board:\n{board}\n\n"
-        "Legal columns: {legal_moves}\n\n"
-        "Respond in this exact format:\n"
-        "<reasoning>One or two short sentences about the best move.</reasoning>\n"
-        "<future_state>Six board rows only, using X O .</future_state>\n"
-        "<opponent_prediction>single_digit_column</opponent_prediction>\n"
-        "<answer>single_digit_column</answer>\n\n"
-        "/no_think"
-    ),
-    "F": (
-        "Connect Four. You are X. Your opponent is O. Drop into column 0-6. Get 4 in a row to win.\n\n"
-        "Board:\n{board}\n\n"
-        "Legal columns: {legal_moves}\n\n"
-        "Respond in this exact format:\n"
-        "<reasoning>One or two short sentences. Mention the opponent's likely reply.</reasoning>\n"
-        "<opponent_prediction>single_digit_column</opponent_prediction>\n"
-        "<answer>single_digit_column</answer>\n\n"
-        "/no_think"
-    ),
-    "G": (
-        "Connect Four. You are X. Your opponent is O. Drop into column 0-6. Get 4 in a row to win.\n\n"
-        "Board:\n{board}\n\n"
-        "Legal columns: {legal_moves}\n\n"
-        "Respond in this exact format:\n"
-        "<reasoning>One or two short sentences about the best move.</reasoning>\n"
-        "<piece_count>Count total pieces on board mod 7</piece_count>\n"
-        "<answer>single_digit_column</answer>\n\n"
-        "/no_think"
-    ),
+# Shared header — same for every condition. Eliminates prompt-structure
+# confound between C/D/E. Earlier per-condition prompts used the literal text
+# "One short sentence." as the <reasoning> placeholder, which Qwen3-4B echoed
+# back verbatim instead of treating as an instruction. Placeholders here are
+# imperative ("Identify…", "Show…", "The column you play…") so the model reads
+# them as directions and replaces them with content.
+_HEADER = (
+    "Connect Four. You are X. Your opponent is O. "
+    "Drop a piece into a column 0-6. First to four in a row wins.\n\n"
+    "Board:\n{board}\n\n"
+    "Legal columns: {legal_moves}\n\n"
+    "Respond in this exact format. Replace each placeholder with your own content; "
+    "do not echo the placeholder text.\n"
+)
+_REASONING = (
+    "<reasoning>Think through the position. Identify threats and opportunities, "
+    "then explain why your chosen move is best.</reasoning>\n"
+)
+_FUTURE_STATE = (
+    "<future_state>The cell your piece will land in after this move, written "
+    "as `row=R col=C` where R is 0-5 and C is 0-6.</future_state>\n"
+)
+_OPP_PREDICTION = (
+    "<opponent_prediction>The column 0-6 the opponent will most likely play "
+    "next.</opponent_prediction>\n"
+)
+_ANSWER = "<answer>The column 0-6 you play.</answer>\n\n/no_think"
+_PIECE_COUNT = (
+    "<piece_count>Total number of pieces currently on the board, modulo 7."
+    "</piece_count>\n"
+)
+
+# Conditions C/D/E/F/G all share the same scaffold (reasoning + future_state +
+# opponent_prediction + answer) so any post-training C-vs-D-vs-E delta is
+# attributable to the reward, not the prompt. A and B remain minimal because
+# they are imitation/sparse baselines that don't use the auxiliary fields.
+_FULL_SCAFFOLD = _HEADER + _REASONING + _FUTURE_STATE + _OPP_PREDICTION + _ANSWER
+_OPPONENT_NEXT_MOVE_SCAFFOLD = _HEADER + _REASONING + _OPP_PREDICTION + _ANSWER
+
+_FULL_SCAFFOLD_CONDITIONS = {
+    "C",
+    "D",
+    "E",
+    "F",
+}
+_OPPONENT_PREDICTION_CONDITIONS = {
+    *_FULL_SCAFFOLD_CONDITIONS,
+    "Value",
+    "OpponentNextMove",
+    "BaseScaffold",
 }
 
-# Required tags per condition (used for format validation)
+CONDITION_PROMPTS: Dict[str, str] = {
+    "A": _HEADER + _REASONING + _ANSWER,
+    "B": _HEADER + _REASONING + _ANSWER,
+    "C": _FULL_SCAFFOLD,
+    "D": _FULL_SCAFFOLD,
+    "E": _FULL_SCAFFOLD,
+    "F": _FULL_SCAFFOLD,
+    "G": _HEADER + _REASONING + _PIECE_COUNT + _ANSWER,
+    "BaseSimple": _HEADER + _REASONING + _ANSWER,
+    "BaseScaffold": _OPPONENT_NEXT_MOVE_SCAFFOLD,
+    "Value": _OPPONENT_NEXT_MOVE_SCAFFOLD,
+    "OpponentNextMove": _OPPONENT_NEXT_MOVE_SCAFFOLD,
+}
+
+# Required tags per condition. C/D/E/F now share the full-scaffold tag set
+# because they share the prompt; the *reward* is what differentiates them.
 REQUIRED_TAGS: Dict[str, List[str]] = {
     "A": ["reasoning", "answer"],
     "B": ["reasoning", "answer"],
-    "C": ["reasoning", "answer"],
+    "C": ["reasoning", "future_state", "opponent_prediction", "answer"],
     "D": ["reasoning", "future_state", "opponent_prediction", "answer"],
     "E": ["reasoning", "future_state", "opponent_prediction", "answer"],
-    "F": ["reasoning", "opponent_prediction", "answer"],
+    "F": ["reasoning", "future_state", "opponent_prediction", "answer"],
     "G": ["reasoning", "piece_count", "answer"],
+    "BaseSimple": ["reasoning", "answer"],
+    "BaseScaffold": ["reasoning", "opponent_prediction", "answer"],
+    "Value": ["reasoning", "opponent_prediction", "answer"],
+    "OpponentNextMove": ["reasoning", "opponent_prediction", "answer"],
 }
 
 
@@ -120,20 +119,14 @@ def extract_tag_text(response: str, tag: str) -> Optional[str]:
 
 
 def _clean_board(env: ConnectFourEnv) -> str:
-    """Create a clean, spaced board with column labels."""
-    grid = env.to_text_grid()
-    lines = grid.split("\n")
-    # Space out each row and add column numbers
-    clean = []
-    for line in lines:
-        if line.startswith("Columns"):
-            continue
-        if line.startswith("Your"):
-            clean.append("  X = you, O = opponent")
-            continue
-        clean.append("  " + " ".join(list(line.replace(" ", ""))) if "." in line or "X" in line or "O" in line else line)
-    clean.append("  0 1 2 3 4 5 6")
-    return "\n".join(clean)
+    """Return the canonical board representation.
+
+    Same string used by env.to_text_grid() — also the reference that the
+    future_state reward and the probe compare against. Keeping all uses
+    aligned means the model never sees one rendering in the prompt and is
+    asked to produce a different one.
+    """
+    return env.to_text_grid()
 
 
 def _extract_first_int(text: str, *, min_value: Optional[int] = None, max_value: Optional[int] = None) -> Optional[int]:
@@ -188,7 +181,8 @@ def parse_response(response: str, condition: str) -> Dict:
         "reasoning": None,
         "move": None,
         "opponent_prediction": None,
-        "future_state": None,
+        "future_state": None,           # raw string (kept for back-compat)
+        "future_cell": None,            # parsed (row, col) tuple, or None
         "piece_count": None,
         "raw": response,
     }
@@ -201,17 +195,28 @@ def parse_response(response: str, condition: str) -> Dict:
     if answer_text is not None:
         result["move"] = _extract_first_int(answer_text, min_value=0, max_value=6)
 
-    # Extract <opponent_prediction>...</opponent_prediction> (conditions D, E, F)
-    if condition in ("D", "E", "F"):
+    # Extract <opponent_prediction>...</opponent_prediction>. C/D/E/F now share
+    # the full scaffold prompt so all four parse this field; reward weighting is
+    # the only thing that differs between them.
+    if condition in _OPPONENT_PREDICTION_CONDITIONS:
         pred_text = extract_tag_text(response, "opponent_prediction")
         if pred_text is not None:
             result["opponent_prediction"] = _extract_first_int(
                 pred_text, min_value=0, max_value=6
             )
 
-    # Extract <future_state>...</future_state> (conditions D and E)
-    if condition in ("D", "E"):
-        result["future_state"] = extract_tag_text(response, "future_state")
+    # Extract <future_state>...</future_state>. New compact format: the model
+    # writes "row=R col=C" identifying the cell its piece will land in.
+    # Reward grades whether (R, C) matches the actual landing cell.
+    if condition in _FULL_SCAFFOLD_CONDITIONS:
+        fs_text = extract_tag_text(response, "future_state")
+        result["future_state"] = fs_text
+        if fs_text is not None:
+            ints = re.findall(r"\d+", fs_text)
+            if len(ints) >= 2:
+                r_val, c_val = int(ints[0]), int(ints[1])
+                if 0 <= r_val <= 5 and 0 <= c_val <= 6:
+                    result["future_cell"] = (r_val, c_val)
 
     # Extract <piece_count>...</piece_count> (condition G)
     if condition == "G":

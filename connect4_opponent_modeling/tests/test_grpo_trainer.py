@@ -71,7 +71,12 @@ def test_invalid_response_gets_zero_format_reward():
 
 
 def test_valid_response_gets_format_reward():
-    response = "<reasoning>test</reasoning><answer>3</answer>"
+    response = (
+        "<reasoning>test</reasoning>"
+        "<future_state>row=5 col=3</future_state>"
+        "<opponent_prediction>4</opponent_prediction>"
+        "<answer>3</answer>"
+    )
     assert RewardCalculator._format_reward(response, "C") == 1.0
 
 
