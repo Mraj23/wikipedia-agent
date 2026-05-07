@@ -68,6 +68,72 @@ def _mean(values: Iterable[float]) -> float:
     return statistics.fmean(vals) if vals else 0.0
 
 
+def _render_prompt(tokenizer, prompt: str) -> str:
+    try:
+        return tokenizer.apply_chat_template(
+            [{"role": "user", "content": prompt}],
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+    except Exception:
+        return prompt
+
+
+def _generate_responses_hf(
+    *,
+    model: str,
+    prompts: List[str],
+    max_input_tokens: int,
+    max_new_tokens: int,
+    temperature: float,
+) -> List[str]:
+    model_fn = create_model_fn(
+        model,
+        max_input_tokens=max_input_tokens,
+        max_new_tokens=max_new_tokens,
+        temperature=temperature,
+    )
+    return [model_fn(prompt) for prompt in prompts]
+
+
+def _generate_responses_vllm(
+    *,
+    model: str,
+    prompts: List[str],
+    max_new_tokens: int,
+    temperature: float,
+    gpu_mem_util: float,
+    max_model_len: int,
+    batch_size: int,
+) -> List[str]:
+    from transformers import AutoTokenizer
+    from vllm import LLM, SamplingParams
+
+    tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=True)
+    rendered = [_render_prompt(tokenizer, prompt) for prompt in prompts]
+
+    llm = LLM(
+        model=model,
+        dtype="bfloat16",
+        gpu_memory_utilization=gpu_mem_util,
+        enforce_eager=True,
+        max_model_len=max_model_len,
+        trust_remote_code=True,
+    )
+    sampling = SamplingParams(
+        n=1,
+        max_tokens=max_new_tokens,
+        temperature=temperature,
+    )
+
+    responses: List[str] = []
+    for start in range(0, len(rendered), batch_size):
+        chunk = rendered[start : start + batch_size]
+        outputs = llm.generate(chunk, sampling, use_tqdm=True)
+        responses.extend(out.outputs[0].text for out in outputs)
+    return responses
+
+
 def evaluate(
     *,
     model: str,
@@ -79,27 +145,49 @@ def evaluate(
     max_new_tokens: int,
     temperature: float,
     max_positions_per_split: Optional[int],
+    use_vllm: bool,
+    gpu_mem_util: float,
+    vllm_batch_size: int,
 ) -> Dict:
     solver = PonsSolver(strict=True)
     if not solver.is_available():
         raise RuntimeError("Pons solver is required. Run scripts/bootstrap_gpu.sh first.")
 
-    model_fn = create_model_fn(
-        model,
-        max_input_tokens=max_input_tokens,
-        max_new_tokens=max_new_tokens,
-        temperature=temperature,
-    )
     records = _load_records(banks_path, max_positions_per_split)
+    prompts: List[str] = []
+    envs: List[ConnectFourEnv] = []
+    score_dicts: List[Dict[int, int]] = []
 
-    outputs: List[Dict] = []
-    for idx, rec in enumerate(records, start=1):
+    for rec in records:
         env = ConnectFourEnv()
         env.from_move_sequence([int(c) for c in rec["moves"]])
-        scores = {int(col): int(score) for col, score in rec["scores"].items()}
+        envs.append(env)
+        score_dicts.append({int(col): int(score) for col, score in rec["scores"].items()})
+        prompts.append(format_prompt(condition, env))
 
-        prompt = format_prompt(condition, env)
-        response = model_fn(prompt)
+    if use_vllm:
+        responses = _generate_responses_vllm(
+            model=model,
+            prompts=prompts,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            gpu_mem_util=gpu_mem_util,
+            max_model_len=max_input_tokens + max_new_tokens,
+            batch_size=vllm_batch_size,
+        )
+    else:
+        responses = _generate_responses_hf(
+            model=model,
+            prompts=prompts,
+            max_input_tokens=max_input_tokens,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+        )
+
+    outputs: List[Dict] = []
+    for idx, (rec, env, scores, response) in enumerate(
+        zip(records, envs, score_dicts, responses), start=1
+    ):
         parsed = parse_response(response, condition)
         schema_valid, schema_reason = validate_response(parsed, condition, env.legal_moves())
 
@@ -156,6 +244,7 @@ def evaluate(
         "banks_path": str(banks_path),
         "max_new_tokens": max_new_tokens,
         "temperature": temperature,
+        "generation_backend": "vllm" if use_vllm else "hf",
         "total": len(outputs),
         "by_split": by_split,
         "primary_mean_move_quality": _mean(
@@ -183,6 +272,9 @@ def main() -> None:
     parser.add_argument("--max_new_tokens", type=int, default=1024)
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--max_positions_per_split", type=int, default=None)
+    parser.add_argument("--use_vllm", action="store_true")
+    parser.add_argument("--gpu_mem_util", type=float, default=0.85)
+    parser.add_argument("--vllm_batch_size", type=int, default=256)
     args = parser.parse_args()
 
     result = evaluate(
@@ -195,6 +287,9 @@ def main() -> None:
         max_new_tokens=args.max_new_tokens,
         temperature=args.temperature,
         max_positions_per_split=args.max_positions_per_split,
+        use_vllm=args.use_vllm,
+        gpu_mem_util=args.gpu_mem_util,
+        vllm_batch_size=args.vllm_batch_size,
     )
     print(json.dumps(result["summary"], indent=2, default=str))
 

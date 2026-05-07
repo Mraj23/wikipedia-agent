@@ -33,6 +33,8 @@ USE_VLLM="${USE_VLLM:-0}"
 WANDB="${WANDB:-0}"
 VERIFY_SETUP="${VERIFY_SETUP:-1}"
 EXPECT_GPU="${EXPECT_GPU:-1}"
+EVAL_VLLM_BATCH_SIZE="${EVAL_VLLM_BATCH_SIZE:-256}"
+EVAL_GPU_MEM_UTIL="${EVAL_GPU_MEM_UTIL:-0.85}"
 
 mkdir -p "$RESULTS_DIR" "$LOG_DIR" "$CKPT_DIR"
 
@@ -60,6 +62,14 @@ EVAL_LIMIT_ARGS=()
 if [ -n "$MAX_EVAL_PER_SPLIT" ]; then
   EVAL_LIMIT_ARGS=(--max_positions_per_split "$MAX_EVAL_PER_SPLIT")
 fi
+EVAL_BACKEND_ARGS=()
+if [ "$USE_VLLM" = "1" ]; then
+  EVAL_BACKEND_ARGS=(
+    --use_vllm
+    --gpu_mem_util "$EVAL_GPU_MEM_UTIL"
+    --vllm_batch_size "$EVAL_VLLM_BATCH_SIZE"
+  )
+fi
 
 echo "=== BaseScaffold eval: $MODEL ==="
 python "$EXP_DIR/eval_move_quality.py" \
@@ -69,6 +79,7 @@ python "$EXP_DIR/eval_move_quality.py" \
   --banks "$DATA_PATH" \
   --output "$RESULTS_DIR/base_scaffold.json" \
   --max_new_tokens "$MAX_TOKENS" \
+  "${EVAL_BACKEND_ARGS[@]}" \
   "${EVAL_LIMIT_ARGS[@]}"
 
 for CONDITION in Value OpponentNextMove; do
@@ -108,6 +119,7 @@ for CONDITION in Value OpponentNextMove; do
       --banks "$DATA_PATH" \
       --output "$RESULTS_DIR/${RUN_NAME}.json" \
       --max_new_tokens "$MAX_TOKENS" \
+      "${EVAL_BACKEND_ARGS[@]}" \
       "${EVAL_LIMIT_ARGS[@]}"
   done
 done
