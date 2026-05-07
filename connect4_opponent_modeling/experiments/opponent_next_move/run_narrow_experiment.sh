@@ -14,6 +14,8 @@ if [ -f "$ROOT_DIR/scripts/gpu_env.sh" ]; then
   source "$ROOT_DIR/scripts/gpu_env.sh"
 fi
 
+export C4_REQUIRE_PONS_SOLVER="${C4_REQUIRE_PONS_SOLVER:-1}"
+
 EXP_DIR="experiments/opponent_next_move"
 DATA_PATH="$EXP_DIR/data/connect4_eval_banks.jsonl"
 RESULTS_DIR="$EXP_DIR/results"
@@ -29,8 +31,24 @@ MAX_TOKENS="${MAX_TOKENS:-1024}"
 MAX_EVAL_PER_SPLIT="${MAX_EVAL_PER_SPLIT:-}"
 USE_VLLM="${USE_VLLM:-0}"
 WANDB="${WANDB:-0}"
+VERIFY_SETUP="${VERIFY_SETUP:-1}"
+EXPECT_GPU="${EXPECT_GPU:-1}"
 
 mkdir -p "$RESULTS_DIR" "$LOG_DIR" "$CKPT_DIR"
+
+if [ "$VERIFY_SETUP" = "1" ]; then
+  VERIFY_ARGS=(--skip-probe-check)
+  if [ "$EXPECT_GPU" = "1" ]; then
+    VERIFY_ARGS+=(--expect-gpu)
+  fi
+  if [ "$USE_VLLM" = "1" ]; then
+    VERIFY_ARGS+=(--expect-vllm)
+  fi
+  if [ "$WANDB" = "1" ]; then
+    VERIFY_ARGS+=(--expect-wandb)
+  fi
+  python scripts/verify_setup.py "${VERIFY_ARGS[@]}"
+fi
 
 if [ ! -f "$DATA_PATH" ]; then
   python "$EXP_DIR/make_position_banks.py" --output "$DATA_PATH"

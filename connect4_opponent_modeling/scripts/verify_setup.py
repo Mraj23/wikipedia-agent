@@ -26,6 +26,11 @@ def main() -> int:
     parser.add_argument("--expect-gpu", action="store_true", help="Require CUDA availability.")
     parser.add_argument("--expect-vllm", action="store_true", help="Require vLLM import.")
     parser.add_argument("--expect-wandb", action="store_true", help="Require wandb import.")
+    parser.add_argument(
+        "--skip-probe-check",
+        action="store_true",
+        help="Do not require data/probe_positions_locked.jsonl.",
+    )
     args = parser.parse_args()
 
     checks: list[tuple[bool, str]] = []
@@ -49,8 +54,9 @@ def main() -> int:
     book_path = PROJECT_ROOT / "7x6.book"
     checks.append((book_path.is_file(), f"opening book exists: {book_path}"))
 
-    probe_path = PROJECT_ROOT / "data" / "probe_positions_locked.jsonl"
-    checks.append((probe_path.is_file(), f"probe positions exist: {probe_path}"))
+    if not args.skip_probe_check:
+        probe_path = PROJECT_ROOT / "data" / "probe_positions_locked.jsonl"
+        checks.append((probe_path.is_file(), f"probe positions exist: {probe_path}"))
 
     from env.connect_four_env import ConnectFourEnv
     from env.pons_wrapper import PonsSolver

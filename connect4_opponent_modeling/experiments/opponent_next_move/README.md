@@ -70,8 +70,13 @@ Fresh GPU setup:
 bash scripts/bootstrap_gpu.sh
 source .venv/bin/activate
 source scripts/gpu_env.sh
-python scripts/verify_setup.py --expect-gpu --expect-vllm --expect-wandb
+python scripts/verify_setup.py --expect-gpu --expect-vllm --expect-wandb --skip-probe-check
 ```
+
+The run script sources `.venv` and `scripts/gpu_env.sh` automatically, sets
+`C4_REQUIRE_PONS_SOLVER=1` by default, and runs `scripts/verify_setup.py` before
+training. For CPU-only dry runs, use `EXPECT_GPU=0`; to skip setup verification,
+use `VERIFY_SETUP=0`.
 
 Smoke test with tiny training/eval:
 
