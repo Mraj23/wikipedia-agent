@@ -126,6 +126,27 @@ WANDB=1 \
 bash experiments/opponent_next_move/run_narrow_experiment.sh
 ```
 
+Faster pilot run:
+
+```bash
+GAME_STEPS=100 \
+GROUP_SIZE=32 \
+EVAL_EVERY=50 \
+TRAIN_MAX_TOKENS=512 \
+EVAL_MAX_TOKENS=1024 \
+VLLM_SYNC_EVERY=10 \
+SEEDS="42" \
+USE_VLLM=1 \
+WANDB=1 \
+bash experiments/opponent_next_move/run_narrow_experiment.sh
+```
+
+`VLLM_SYNC_EVERY=1` keeps generation closest to the latest policy but saves and
+reloads a full model every step. Larger values are faster and useful for pilot
+runs, but they make the vLLM sampler use slightly stale policy weights between
+syncs. Keep the final confirmatory run at `1` unless pilot speed is otherwise
+prohibitive.
+
 Outputs:
 
 ```text

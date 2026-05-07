@@ -39,6 +39,7 @@ class GRPOConfig:
     opponent_depth: int = 6
     use_rae: bool = True
     use_vllm: bool = False
+    vllm_sync_every: int = 1
     seed: int = 42
     reward_weights: Optional[Dict[str, float]] = field(default=None)
     use_wandb: bool = False

@@ -28,6 +28,9 @@ GAME_STEPS="${GAME_STEPS:-500}"
 GROUP_SIZE="${GROUP_SIZE:-64}"
 EVAL_EVERY="${EVAL_EVERY:-250}"
 MAX_TOKENS="${MAX_TOKENS:-1024}"
+TRAIN_MAX_TOKENS="${TRAIN_MAX_TOKENS:-$MAX_TOKENS}"
+EVAL_MAX_TOKENS="${EVAL_MAX_TOKENS:-$MAX_TOKENS}"
+VLLM_SYNC_EVERY="${VLLM_SYNC_EVERY:-1}"
 MAX_EVAL_PER_SPLIT="${MAX_EVAL_PER_SPLIT:-}"
 USE_VLLM="${USE_VLLM:-0}"
 WANDB="${WANDB:-0}"
@@ -78,7 +81,7 @@ python "$EXP_DIR/eval_move_quality.py" \
   --model_label BaseScaffold \
   --banks "$DATA_PATH" \
   --output "$RESULTS_DIR/base_scaffold.json" \
-  --max_new_tokens "$MAX_TOKENS" \
+  --max_new_tokens "$EVAL_MAX_TOKENS" \
   "${EVAL_BACKEND_ARGS[@]}" \
   "${EVAL_LIMIT_ARGS[@]}"
 
@@ -97,7 +100,8 @@ for CONDITION in Value OpponentNextMove; do
       --game_steps "$GAME_STEPS"
       --group_size "$GROUP_SIZE"
       --eval_every "$EVAL_EVERY"
-      --max_tokens "$MAX_TOKENS"
+      --max_tokens "$TRAIN_MAX_TOKENS"
+      --vllm_sync_every "$VLLM_SYNC_EVERY"
       --seed "$SEED"
       --wandb_run_name "$RUN_NAME"
     )
@@ -118,7 +122,7 @@ for CONDITION in Value OpponentNextMove; do
       --model_label "$RUN_NAME" \
       --banks "$DATA_PATH" \
       --output "$RESULTS_DIR/${RUN_NAME}.json" \
-      --max_new_tokens "$MAX_TOKENS" \
+      --max_new_tokens "$EVAL_MAX_TOKENS" \
       "${EVAL_BACKEND_ARGS[@]}" \
       "${EVAL_LIMIT_ARGS[@]}"
   done

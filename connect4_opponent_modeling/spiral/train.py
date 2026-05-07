@@ -63,6 +63,13 @@ def main() -> None:
         help="Use vLLM for fast generation (GPU only, requires vllm installed)",
     )
     parser.add_argument(
+        "--vllm_sync_every", type=int, default=None,
+        help=(
+            "Save current policy weights for vLLM every N optimizer steps. "
+            "Default 1 is most on-policy but slower; larger values are faster pilot runs."
+        ),
+    )
+    parser.add_argument(
         "--wandb", action="store_true",
         help="Enable Weights & Biases logging for real-time monitoring",
     )
@@ -108,6 +115,8 @@ def main() -> None:
         config.seed = args.seed
     if args.use_vllm:
         config.use_vllm = True
+    if args.vllm_sync_every is not None:
+        config.vllm_sync_every = max(1, args.vllm_sync_every)
     if args.wandb:
         config.use_wandb = True
     if args.wandb_project:
@@ -129,6 +138,7 @@ def main() -> None:
     logger.info("Use RAE: %s", config.use_rae)
     logger.info("Reward weights: %s", config.reward_weights)
     logger.info("W&B: %s", "enabled" if config.use_wandb else "disabled")
+    logger.info("vLLM sync every: %d", config.vllm_sync_every)
     logger.info("Log dir: %s", log_dir)
 
     # Train

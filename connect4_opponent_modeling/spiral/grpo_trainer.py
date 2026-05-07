@@ -284,7 +284,7 @@ class GRPOTrainer:
             loss, kl = self._grpo_step(prompt, completions, gen_log_probs, advantages)
 
             # 7. Sync weights to vLLM engine if using it
-            self._sync_vllm_weights()
+            vllm_synced = self._sync_vllm_weights()
 
             step_time = time.time() - step_start
 
@@ -306,6 +306,7 @@ class GRPOTrainer:
                 "temperature": self._temperature,
                 "step_time_s": step_time,
                 "zero_reward_pct": zero_reward_pct,
+                "vllm_synced": float(vllm_synced),
             }
             self._train_log.append(log_entry)
 
@@ -350,6 +351,7 @@ class GRPOTrainer:
                     "train/avg_thinking_tokens": avg_thinking_tokens,
                     "train/temperature": self._temperature,
                     "train/zero_reward_pct": zero_reward_pct,
+                    "train/vllm_synced": log_entry["vllm_synced"],
                     "train/mode_collapse_flag": float(most_common_pct > 0.8),
                 }
                 # Log per-component reward means across the group
@@ -615,11 +617,25 @@ class GRPOTrainer:
         self.model.train()
         return completions, log_probs_list
 
-    def _sync_vllm_weights(self) -> None:
+    def _sync_vllm_weights(self) -> bool:
         """Save updated weights so vLLM loads them on next generation."""
         if self._vllm_gen is None:
-            return
+            return False
+        sync_every = max(1, int(getattr(self.config, "vllm_sync_every", 1)))
+        should_sync = (
+            self._step == 0
+            or (self._step + 1) % sync_every == 0
+            or self._step == self.config.game_steps - 1
+        )
+        if not should_sync:
+            logger.debug(
+                "Skipping vLLM weight sync at step %d (sync_every=%d).",
+                self._step,
+                sync_every,
+            )
+            return False
         self._vllm_gen.update_weights(self.model, self.tokenizer, self._step)
+        return True
 
     def _compute_log_probs(
         self, prompt_ids: torch.Tensor, gen_ids: torch.Tensor
