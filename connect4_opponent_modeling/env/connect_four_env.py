@@ -93,36 +93,10 @@ class ConnectFourEnv:
         Returns:
             np.ndarray of shape (6, 7) with values 0 (empty), 1 (player 1), 2 (player 2).
         """
-        # OpenSpiel connect_four observation tensor layout:
-        # 3 planes of 6x7: [current_player_pieces, opponent_pieces, empty]
-        # The observation is from the perspective of the current player.
-        obs_tensor = self._state.observation_tensor()
-        obs = np.array(obs_tensor)
-        # Tensor is 3 * 6 * 7 = 126 elements
-        planes = obs.reshape(3, self.ROWS, self.COLS)
-        # planes[0] = current player's pieces
-        # planes[1] = opponent's pieces
-        # planes[2] = empty cells
-
-        board = np.zeros((self.ROWS, self.COLS), dtype=int)
-
-        current_osp = self._state.current_player() if not self._state.is_terminal() else 0
-        if self._state.is_terminal():
-            # For terminal states, rebuild from history
-            return self._get_board_from_history()
-
-        # Current player's pieces = 1 if current_osp==0, else 2
-        # Opponent's pieces = 2 if current_osp==0, else 1
-        cp = current_osp + 1  # 1-indexed current player
-        op = 2 if cp == 1 else 1
-
-        for r in range(self.ROWS):
-            for c in range(self.COLS):
-                if planes[0][r][c] == 1.0:
-                    board[r][c] = cp
-                elif planes[1][r][c] == 1.0:
-                    board[r][c] = op
-        return board
+        # Use the replayed move history as the source of truth. OpenSpiel's
+        # observation tensor is perspective-dependent, while this wrapper's
+        # public convention is absolute player ids with row 5 as the floor.
+        return self._get_board_from_history()
 
     def _get_board_from_history(self) -> np.ndarray:
         """Reconstruct board from move history."""

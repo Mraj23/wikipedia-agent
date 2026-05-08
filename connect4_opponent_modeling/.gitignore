@@ -40,10 +40,14 @@ archive/invalidated_2026_05_01/backups/
 venv/
 .venv/
 .venv_tinker/
+.venv-tinker/
 
 # Experiment-local generated artifacts
 experiments/opponent_next_move/data/
 experiments/opponent_next_move/tinker_logs*/
 experiments/opponent_next_move/tinker_results*/
 experiments/opponent_next_move/base_scaffold_reasoning_report.html
+faithfulness/data/*.jsonl
+faithfulness/data/runs*/
+faithfulness/results*/
 *.bak
