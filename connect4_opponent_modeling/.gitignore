@@ -39,3 +39,11 @@ archive/invalidated_2026_05_01/backups/
 .env
 venv/
 .venv/
+.venv_tinker/
+
+# Experiment-local generated artifacts
+experiments/opponent_next_move/data/
+experiments/opponent_next_move/tinker_logs*/
+experiments/opponent_next_move/tinker_results*/
+experiments/opponent_next_move/base_scaffold_reasoning_report.html
+*.bak

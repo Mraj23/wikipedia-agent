@@ -1,0 +1,4 @@
+# Optional dependencies for the Tinker-backed Connect Four experiment.
+# Install these in addition to requirements.txt.
+tinker
+tinker-cookbook

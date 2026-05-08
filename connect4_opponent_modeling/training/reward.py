@@ -221,58 +221,64 @@ class RewardCalculator:
     def _future_state_accuracy(
         self, env: ConnectFourEnv, played_col: int, stated_future: str
     ) -> float:
-        """Score the future state prediction accuracy.
+        """Score the future-state landing-cell prediction.
 
-        Applies played_col to a copy of env, gets actual resulting text grid,
-        then compares to stated_future.
+        After E's lesson that asking the model to regurgitate a 42-cell board
+        was wasteful and bug-prone, the contract is now: the model emits
+        "row=R col=C" naming the cell its piece will land in. Reward = 1.0 if
+        (R, C) matches the actual landing cell, else 0.0.
 
         Args:
             env: Game state BEFORE played_col.
             played_col: Column played.
-            stated_future: The model's predicted board state as text.
+            stated_future: Raw text of the <future_state> tag.
 
         Returns:
-            1.0 for exact match, otherwise count matching cells / 42.
+            1.0 for correct (row, col), 0.0 otherwise.
         """
         if not stated_future:
             return 0.0
 
-        next_env = env.copy()
-        next_env.make_move(played_col)
-        actual_grid = next_env.to_text_grid()
-
-        # Extract just the board rows (first 6 lines) from both grids
-        actual_lines = actual_grid.strip().split("\n")[:6]
-        stated_lines = stated_future.strip().split("\n")[:6]
-
-        if len(actual_lines) != 6 or len(stated_lines) < 6:
-            # If stated_future doesn't have 6 rows, do cell comparison with what we have
-            pass
-
-        # Extract cells
-        actual_cells = []
-        for line in actual_lines:
-            actual_cells.extend(line.strip().split())
-
-        stated_cells = []
-        for line in stated_lines[:6]:
-            stated_cells.extend(line.strip().split())
-
-        if not stated_cells:
+        # Parse first two integers from the stated future_state text.
+        ints = re.findall(r"\d+", stated_future)
+        if len(ints) < 2:
+            return 0.0
+        try:
+            stated_row, stated_col = int(ints[0]), int(ints[1])
+        except ValueError:
+            return 0.0
+        if not (0 <= stated_row <= 5 and 0 <= stated_col <= 6):
             return 0.0
 
-        # Exact match check
-        if actual_cells == stated_cells and len(actual_cells) == 42:
-            return 1.0
+        # Compute actual landing cell.
+        next_env = env.copy()
+        try:
+            next_env.make_move(played_col)
+        except (ValueError, Exception):
+            return 0.0
+        actual_row = self._landing_row(env, played_col)
+        if actual_row is None:
+            return 0.0
+        return 1.0 if (stated_row == actual_row and stated_col == played_col) else 0.0
 
-        # Partial credit: matching cells / 42
-        total = 42
-        matches = sum(
-            1
-            for a, s in zip(actual_cells, stated_cells)
-            if a == s
-        )
-        return matches / total
+    @staticmethod
+    def _landing_row(env: ConnectFourEnv, col: int) -> Optional[int]:
+        """Row index where a piece dropped into `col` will land, or None if illegal.
+
+        Uses the env's internal board representation: row 0 is the first slot
+        a piece occupies in an empty column, with each subsequent piece going
+        to the next-higher row index in that column.
+        """
+        try:
+            board = env._get_board_array()
+        except (AttributeError, Exception):
+            return None
+        # First empty row from the bottom up of the internal representation.
+        # In this env, row 0 fills first, then row 1, ...
+        for r in range(env.ROWS):
+            if board[r][col] == 0:
+                return r
+        return None
 
     @staticmethod
     def _terminal_reward(game_result: str) -> float:

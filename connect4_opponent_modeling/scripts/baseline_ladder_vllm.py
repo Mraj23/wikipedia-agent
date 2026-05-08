@@ -116,7 +116,7 @@ def main():
     parser.add_argument("--n_games", type=int, default=20)
     parser.add_argument("--depths", type=int, nargs="+", default=[1, 2, 4])
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--max_tokens", type=int, default=160)
+    parser.add_argument("--max_tokens", type=int, default=500)
     parser.add_argument("--gpu_mem_util", type=float, default=0.85)
     parser.add_argument("--out", default="/tmp/ladder_result.json")
     args = parser.parse_args()
@@ -132,7 +132,7 @@ def main():
         dtype="bfloat16",
         gpu_memory_utilization=args.gpu_mem_util,
         enforce_eager=True,
-        max_model_len=1024,
+        max_model_len=2048,
     )
     logger.info("vLLM ready in %.1fs", time.time() - t0)
 

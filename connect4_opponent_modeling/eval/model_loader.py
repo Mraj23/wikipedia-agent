@@ -12,7 +12,7 @@ def create_model_fn(
     model_path: str,
     *,
     max_input_tokens: int = 2048,
-    max_new_tokens: int = 256,
+    max_new_tokens: int = 500,
     temperature: float = 0.0,
 ) -> Callable[[str], str]:
     """Create a model callable from a HuggingFace model or local checkpoint.

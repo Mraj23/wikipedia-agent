@@ -157,6 +157,20 @@ experiments/opponent_next_move/results/
 experiments/opponent_next_move/results/summary.json
 ```
 
+## Tinker Backend
+
+There is also a Tinker LoRA backend for the same experiment:
+
+```bash
+pip install -r requirements-tinker.txt
+export TINKER_API_KEY="..."
+RL_STEPS=2 GROUP_SIZE=4 MAX_EVAL_PER_SPLIT=2 \
+bash experiments/opponent_next_move/run_tinker_experiment.sh
+```
+
+See `experiments/opponent_next_move/README_TINKER.md` for the full Tinker run
+plan, including the optional `SFTBestMove` baseline.
+
 ## Decision Rule
 
 The clean positive result is:

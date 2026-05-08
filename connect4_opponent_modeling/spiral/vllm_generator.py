@@ -39,7 +39,7 @@ class VLLMGenerator:
         self,
         prompt: str,
         n: int,
-        max_tokens: int = 256,
+        max_tokens: int = 500,
         min_tokens: int = 10,
         temperature: float = 0.7,
     ) -> List[str]:
@@ -74,7 +74,7 @@ class VLLMGenerator:
                 dtype=self._dtype,
                 gpu_memory_utilization=gpu_mem_util,
                 enforce_eager=True,
-                max_model_len=1024,
+                max_model_len=2048,
             )
             logger.info("vLLM engine ready.")
 
