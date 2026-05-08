@@ -33,16 +33,30 @@ def main() -> int:
         action="store_true",
         help="Allow Pons minimax fallback (NOT recommended for locking).",
     )
+    parser.add_argument(
+        "--fallback-depth",
+        type=int,
+        default=8,
+        help="Minimax search depth when Pons binary is unavailable. "
+        "Lower = faster but less accurate (4 for development, 8 for production).",
+    )
+    parser.add_argument(
+        "--candidate-games",
+        type=int,
+        default=1500,
+        help="Number of random self-play games to seed the candidate pool.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-    solver = PonsSolver(strict=not args.allow_fallback)
+    solver = PonsSolver(strict=not args.allow_fallback, fallback_depth=args.fallback_depth)
     lock_eval_set(
         args.output,
         n_per_category=args.n_per_category,
         seed=args.seed,
         solver=solver,
+        candidate_games=args.candidate_games,
     )
     return 0
 

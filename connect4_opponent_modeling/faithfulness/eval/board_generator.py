@@ -35,7 +35,7 @@ from typing import Dict, List, Optional
 
 from env.connect_four_env import ConnectFourEnv
 from env.pons_wrapper import PonsSolver
-from faithfulness.verifier.claim_verifier import _opponent_can_win_now
+from faithfulness.strategic_moves import PositionTag, classify_position
 
 logger = logging.getLogger(__name__)
 
@@ -47,37 +47,24 @@ CATEGORIES = (
     "hard_midgame",
 )
 
-
-def _has_immediate_win(env: ConnectFourEnv) -> bool:
-    cur = env.current_player()
-    for col in env.legal_moves():
-        nxt = env.copy()
-        nxt.make_move(col)
-        if nxt.winner() == cur:
-            return True
-    return False
+# Positions whose category is decided by board rules alone — no Pons call
+# needed for these. The solver is still called once per accepted position to
+# fill verifier_meta (see _build_record), but never on rejected candidates.
+_TAG_TO_CATEGORY = {
+    PositionTag.HAS_IMMEDIATE_WIN: "immediate_win_available",
+    PositionTag.MUST_BLOCK_THREAT: "opponent_immediate_threat",
+}
 
 
-def _categorize(env: ConnectFourEnv, solver: PonsSolver) -> Optional[str]:
-    if env.is_terminal():
-        return None
-    legal = env.legal_moves()
-    if not legal:
-        return None
-
-    if _has_immediate_win(env):
-        return "immediate_win_available"
-
-    if _opponent_can_win_now(env):
-        return "opponent_immediate_threat"
-
-    scores = solver.analyze(env)
+def _quiet_category_from_scores(
+    env: ConnectFourEnv, scores: Dict[int, int]
+) -> Optional[str]:
+    """Decide between blunder_state / no_immediate_tactic / hard_midgame
+    given an already-computed score dict. Pure logic; no solver call.
+    """
     if not scores:
         return None
     best_value = max(scores.values())
-
-    # Blunder state: best move > 0 (winning) but at most one move keeps the
-    # win; OR best move = 0 (drawing) but at most one move avoids loss.
     non_losing = [c for c, v in scores.items() if v >= 0]
     matches_best = [c for c, v in scores.items() if v == best_value]
     if best_value > 0 and len(matches_best) == 1:
@@ -85,10 +72,32 @@ def _categorize(env: ConnectFourEnv, solver: PonsSolver) -> Optional[str]:
     if best_value == 0 and len(non_losing) == 1:
         return "blunder_state"
 
-    pieces = sum(1 for c in env.to_move_sequence())
+    pieces = len(env.to_move_sequence())
     if pieces >= 20:
         return "hard_midgame"
     return "no_immediate_tactic"
+
+
+def _quiet_category(env: ConnectFourEnv, solver: PonsSolver) -> Optional[str]:
+    """Decide between blunder_state / no_immediate_tactic / hard_midgame.
+
+    Calls solver.analyze; for the hot path use _quiet_category_from_scores
+    to share one solver call across categorization and verifier_meta.
+    """
+    scores = solver.analyze(env)
+    return _quiet_category_from_scores(env, scores)
+
+
+def _categorize_cheap(env: ConnectFourEnv) -> Optional[str]:
+    """Cheap (no-solver) category decision. Returns None if a solver call is
+    needed to disambiguate.
+    """
+    if env.is_terminal() or not env.legal_moves():
+        return None
+    tag = classify_position(env)
+    if tag in _TAG_TO_CATEGORY:
+        return _TAG_TO_CATEGORY[tag]
+    return None  # one of the quiet categories — needs the solver
 
 
 def _seeded_position_pool(seed: int, n_games: int) -> List[str]:
@@ -146,6 +155,9 @@ def generate_stratified_eval_set(
     target = n_per_category
     iterations = 0
     cap = max_attempts or len(pool)
+    # Categories whose acceptance does not depend on a solver call; we never
+    # invoke Pons before the position is accepted into one of these.
+    cheap_categories = set(_TAG_TO_CATEGORY.values())
 
     for moves_str in pool:
         if iterations >= cap:
@@ -158,10 +170,31 @@ def generate_stratified_eval_set(
             env.from_move_sequence([int(ch) for ch in moves_str])
         except Exception:
             continue
-        cat = _categorize(env, solver)
-        if cat is None or len(buckets[cat]) >= target:
-            continue
-        scores = solver.analyze(env)
+
+        cheap = _categorize_cheap(env)
+        scores: Optional[Dict[int, int]] = None
+        if cheap is not None:
+            if len(buckets[cheap]) >= target:
+                continue
+            cat = cheap
+        else:
+            # Skip the expensive solver call when every quiet bucket is full.
+            quiet_full = all(
+                len(buckets[c]) >= target
+                for c in CATEGORIES
+                if c not in cheap_categories
+            )
+            if quiet_full:
+                continue
+            scores = solver.analyze(env)
+            cat = _quiet_category_from_scores(env, scores)
+            if cat is None or len(buckets[cat]) >= target:
+                continue
+
+        # One solver call per accepted position to populate verifier_meta —
+        # reuse the call from _quiet_category when we already have it.
+        if scores is None:
+            scores = solver.analyze(env)
         if not scores:
             continue
         best_value = max(scores.values())
@@ -197,6 +230,7 @@ def lock_eval_set(
     n_per_category: int = 100,
     seed: int = 42,
     solver: Optional[PonsSolver] = None,
+    candidate_games: int = 1500,
 ) -> None:
     """Write a stratified eval set to disk. Refuses to overwrite.
 
@@ -215,6 +249,7 @@ def lock_eval_set(
         n_per_category=n_per_category,
         seed=seed,
         solver=solver,
+        candidate_games=candidate_games,
     )
     with out.open("w") as f:
         for rec in records:

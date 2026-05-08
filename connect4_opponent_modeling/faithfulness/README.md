@@ -32,6 +32,7 @@ faithfulness/
 ├── claims.py                    # ClaimType enum + Claim dataclass
 ├── prompt.py                    # JSON-grammar prompt for atomic claims
 ├── parse.py                     # Tolerant JSON parser
+├── strategic_moves.py           # Deterministic per-move tags + rule-based agent
 ├── verifier/
 │   ├── claim_verifier.py        # Truth oracle for each claim type
 │   └── move_evaluator.py        # Clipped solver regret
@@ -53,16 +54,62 @@ faithfulness/
 └── data/                        # locked artifacts (gitignored except .gitkeep)
 ```
 
+## Deterministic strategic-move rules (`strategic_moves.py`)
+
+A pure board-rule classifier — no solver, no ML. Two layers:
+
+| Function                | Returns                                                                 |
+| ----------------------- | ----------------------------------------------------------------------- |
+| `classify_move(env, c)` | `StrategicTag` for column `c`: highest-priority strategic role          |
+| `classify_position(env)`| `PositionTag`: cheapest deterministic stratum of the position itself    |
+| `rule_based_move(env)`  | `RuleBasedDecision`: column + tag + rationale, no solver                |
+
+Move tag priority (first match wins):
+
+1. `IMMEDIATE_WIN`
+2. `BLOCK_IMMEDIATE_THREAT`
+3. `ALLOWS_OPPONENT_IMMEDIATE_WIN`
+4. `CREATES_DOUBLE_THREAT`
+5. `CREATES_THREAT`
+6. `BLOCKS_OPPONENT_THREAT`
+7. `CENTER_PLAY`
+8. `NEUTRAL`
+
+Position tags (`PositionTag`): `HAS_IMMEDIATE_WIN`, `MUST_BLOCK_THREAT`,
+`HAS_DOUBLE_THREAT_MOVE`, `HAS_FORCING_THREAT`, `QUIET`. The eval-set
+generator uses `classify_position` as a cheap pre-filter so the slow
+Pons/minimax call only runs on positions whose category isn't already
+settled by board rules.
+
+`rule_based_move` is a deterministic non-solver baseline: take immediate
+win → block immediate threat → create double threat → create threat →
+deny opponent → center → closest-to-center safe move. Useful as:
+
+- a non-LLM opponent for game-quality testing,
+- a "what would a textbook player do" oracle when comparing model claims
+  to expected reasoning, and
+- a fixed reference policy whose decisions are fully explained by tags.
+
 ## Workflow
 
 1. **Lock the eval set** (one-time):
    ```bash
+   # With Pons binary installed (production):
    python -m faithfulness.scripts.generate_eval_set \
        --output faithfulness/data/eval_boards.jsonl \
        --n-per-category 100 --seed 42
+
+   # Without Pons (development): use the minimax fallback. Lower depth = faster
+   # but less accurate; depth 4 is good for development, 8 for higher fidelity.
+   python -m faithfulness.scripts.generate_eval_set \
+       --output faithfulness/data/eval_boards.jsonl \
+       --n-per-category 100 --seed 42 \
+       --allow-fallback --fallback-depth 4 --candidate-games 6000
    ```
    The file refuses to overwrite. Mirrors `data/probe_positions_locked.jsonl`'s
-   immutability rule.
+   immutability rule. The cheap pre-filter from `strategic_moves.py` lets the
+   first two categories (`immediate_win_available`, `opponent_immediate_threat`)
+   skip the solver entirely; only the three "quiet" categories require it.
 
 2. **Baseline evaluation** (no training needed):
    ```bash
@@ -139,6 +186,7 @@ move the model is considering. See `claims.py` for the docstring and
 python -m pytest tests/test_faithfulness_*.py
 ```
 
-51 tests covering claims, parsing, verifier (golden positions), move
-evaluator, interventions, causal pipeline (deterministic stub generator,
-no real model), reward calculator, metrics, and board generator.
+69 tests covering claims, parsing, strategic-move classifier, verifier
+(golden positions), move evaluator, interventions, causal pipeline
+(deterministic stub generator — no real model), reward calculator, metrics,
+and board generator.
