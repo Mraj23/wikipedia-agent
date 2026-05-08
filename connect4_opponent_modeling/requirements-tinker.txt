@@ -1,0 +1,12 @@
+# Tinker SDK + cookbook utilities for the faithfulness experiment.
+# Kept separate from requirements.txt so the existing opponent-modeling
+# experiment stack is unchanged.
+#
+# Usage:
+#     pip install -r requirements-tinker.txt
+#
+# Set TINKER_API_KEY (and TINKER_BASE_URL if your service is non-default)
+# before invoking faithfulness.scripts.train.
+
+tinker
+tinker-cookbook
