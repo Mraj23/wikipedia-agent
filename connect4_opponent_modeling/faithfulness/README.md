@@ -45,13 +45,39 @@ faithfulness/
 │   └── trainer.py               # Tinker GRPO loop
 ├── eval/
 │   ├── board_generator.py       # stratified eval-set + lock_eval_set
+│   ├── training_pool.py         # large fast training-position generator
 │   ├── evaluator.py             # end-to-end checkpoint eval
 │   └── metrics.py               # 2x2 FaithfulnessMetrics
 ├── scripts/
 │   ├── generate_eval_set.py     # CLI to lock data/eval_boards.jsonl
+│   ├── generate_training_pool.py # CLI: data/training_positions.jsonl
 │   ├── eval_checkpoint.py       # CLI: --mode local | tinker
 │   └── train.py                 # CLI: Tinker GRPO entrypoint
-└── data/                        # locked artifacts (gitignored except .gitkeep)
+└── data/
+    ├── eval_boards.jsonl        # locked eval set (immutable, Pons-scored)
+    └── training_positions.jsonl # training pool (regenerable, no Pons cache)
+```
+
+## Two position datasets
+
+| Dataset             | Path                            | Size    | Pons cached? | Mutable? |
+| ------------------- | ------------------------------- | ------- | ------------ | -------- |
+| Eval set            | `data/eval_boards.jsonl`        | 250-500 | yes          | locked   |
+| Training pool       | `data/training_positions.jsonl` | 50K-100K| no           | regen ok |
+
+The eval set is small, expensive (Pons score per position), and locked.
+The training pool is large, cheap (deterministic strategic-tag metadata
+only — no solver calls during generation), and regenerable. The RL trainer
+samples positions from the pool and calls Pons on the fly for the regret
+reward. Pre-scoring 100K positions would be wasteful when only a fraction
+are sampled per run.
+
+Training-pool record:
+```json
+{"moves": "33245...", "position_tag": "must_block_threat",
+ "current_player": 1, "legal_moves": [0, 1, 2, 4, 5, 6],
+ "move_tags": {"0": "neutral", "4": "block_immediate_threat", ...},
+ "ply": 6}
 ```
 
 ## Deterministic strategic-move rules (`strategic_moves.py`)
@@ -91,6 +117,15 @@ deny opponent → center → closest-to-center safe move. Useful as:
 - a fixed reference policy whose decisions are fully explained by tags.
 
 ## Workflow
+
+0. **Generate the training pool** (regenerable, fast, no solver):
+   ```bash
+   python -m faithfulness.scripts.generate_training_pool \
+       --output faithfulness/data/training_positions.jsonl \
+       --n-positions 100000 --seed 42
+   ```
+   Stratifies by `PositionTag` from `strategic_moves.py`. ~6s per 5K
+   positions, so 100K finishes in ~2 minutes.
 
 1. **Lock the eval set** (one-time):
    ```bash
@@ -186,7 +221,7 @@ move the model is considering. See `claims.py` for the docstring and
 python -m pytest tests/test_faithfulness_*.py
 ```
 
-69 tests covering claims, parsing, strategic-move classifier, verifier
+73 tests covering claims, parsing, strategic-move classifier, verifier
 (golden positions), move evaluator, interventions, causal pipeline
 (deterministic stub generator — no real model), reward calculator, metrics,
-and board generator.
+board generator, and training pool.
