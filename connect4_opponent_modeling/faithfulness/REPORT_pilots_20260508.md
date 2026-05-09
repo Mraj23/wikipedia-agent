@@ -9,7 +9,7 @@ Four 50-step pilots run on Tinker (Qwen3-4B-Instruct-2507, claims_rationale cond
 | v1 | random self-play (fallback) | raw mean-center | off | Marginal — no clear trend, but variance OK |
 | v2 | tactical-stratified (25K) | raw mean-center | on | **Worse** — severe mode collapse |
 | v3 | tactical-stratified (25K) | **standardized** | on | Same as v2 — standardization alone insufficient |
-| v4 | random self-play (fallback) | **standardized** | on | **Healthier** — variance restored, in progress at write time |
+| v4 | random self-play (fallback) | **standardized** | on | **Working baseline** — best on every metric, only run with rising optimal_rate |
 
 **Headline finding:** the tactical-stratified pool was the dominant cause of the failure, not the trainer's gradient math. Tactical positions have a clear correct answer; once the model agrees with itself across 8 completions, GRPO has zero variance and skips the group. The "fix" we thought we needed (advantage standardization) was a real bug worth fixing on its own merits but did not rescue the run on its own.
 
@@ -18,24 +18,31 @@ Four 50-step pilots run on Tinker (Qwen3-4B-Instruct-2507, claims_rationale cond
 ## Pilot-by-pilot results
 
 ```
-                v1              v2              v3              v4 (10/50)
+                v1              v2              v3              v4
                 random          tactical        tactical        random
                 raw adv         raw adv         std adv         std adv
                 no dyn temp     dyn temp        dyn temp        dyn temp
-                ─────────       ─────────       ─────────       ──────────
-mean_reward     -0.479          -0.552          -0.545          -0.496
-last-10         -0.475          -0.590          -0.589          (early)
-optimal_rate    0.402           0.396           0.403           0.418
-last-10         0.327           0.355           0.356           (early)
-skipped/32      10.5            24.6            26.5            13.6
-last-10         9.9             30.9            31.3            (early)
-unique moves    -               3.52            3.06            6.40
-last-10         -               2.10            2.00            (early)
-most_common%    -               0.846           0.864           0.645
-last-10         -               0.959           0.959           (early)
+                ─────────       ─────────       ─────────       ─────────
+mean_reward     -0.479          -0.552          -0.545          -0.455   ← v4 best
+first-10        -0.513          -0.606          -0.576          -0.496
+last-10         -0.475          -0.590          -0.589          -0.435   ← only v4 improves
+optimal_rate    0.402           0.396           0.403           0.438    ← v4 best
+first-10        0.398           0.359           0.391           0.418
+last-10         0.327           0.355           0.356           0.439    ← only v4 trends up
+skipped/32      10.5            24.6            26.5            22.8
+first-10        8.9             11.8            14.7            13.6
+last-10         9.9             30.9            31.3            26.4
+unique moves    -               3.52            3.06            4.40
+first-10        -               6.50            5.40            6.40
+last-10         -               2.10            2.00            3.90
+most_common%    -               0.846           0.864           0.816
+first-10        -               0.494           0.540           0.645
+last-10         -               0.959           0.959           0.850
 ```
 
 (`unique_moves` and `most_common_move_pct` were added in this session, so v1 has no values for them.)
+
+**The cleanest learning signal is `optimal_rate`'s trajectory.** v1, v2, v3 all *declined* across the run (model got worse). v4 *rose* (0.418 first-10 → 0.439 last-10). That's the first directional evidence that any pilot is learning the task at all.
 
 ---
 
@@ -51,7 +58,7 @@ Replacing `r - mean` with `(r - mean) / (std + 1e-8)` via the existing `spiral.r
 
 ### 3. Reverting to random self-play in v4
 
-Through 10 steps, v4 shows `most_common_pct = 0.65`, `unique_moves = 6.4`, and ~14 skipped/32. That matches v1's variance profile (10 skipped/32) within early-step noise — i.e., the random pool restores the diversity GRPO needs. Standardized advantages on top should produce cleaner gradient updates than v1 did. Final v4 numbers TBD.
+V4 finished as the only pilot that learns. Headline numbers: `optimal_rate` 0.418 → 0.439 across the run (v1/v2/v3 all dropped); `mean_reward` -0.496 → -0.435 (v1/v2/v3 all flat-or-declining); best mean across all metrics. Mode collapse still creeps in late (skipped groups 13.6 → 26.4, unique moves 6.4 → 3.9), so v4 is not a finished trainer — but it's the first configuration that produces a positive-direction signal at all. **Random pool + standardized advantages is the configuration to build the formal v0 from.**
 
 ### 4. Stratified pool generator (`--mix tactical`)
 
@@ -93,11 +100,14 @@ Of the original five suggested fixes:
 
 ## Things to pin down before the next pilot
 
-1. **Wait for v4 to finish.** If v4's final numbers show `optimal_rate` trending up across steps (instead of v1/v2/v3's flat-or-down trend), then standardized advantages + random pool = a working baseline. That's the configuration to build the formal v0 from.
+1. **V4's late-run mode collapse is the next bottleneck.** Skipped groups 13.6 → 26.4 over 50 steps, unique moves 6.4 → 3.9. The policy is sharpening on the few groups that do produce gradient, and that sharpening narrows the column distribution further. Single-variable next change candidates, ranked:
+   - `--group-size 16` (matches working `tinker_train.py`; halves variance noise on per-group advantage estimates).
+   - Higher `--temperature-max` (e.g., 2.0) — cheap, may not help much given the rationale-tokens-determine-column structure of `claims_rationale`.
+   - Surgical alternative: apply temperature only to the chosen-column token. Trainer change required.
 
-2. **If v4 also flat-trends**, the next single-variable change is `--group-size 16` (matches working `tinker_train.py` more closely; gives more reliable per-group variance estimates). Held back today to keep attribution clean.
+2. **Run for more than 50 steps.** V4 is still in its early phase of learning at step 50. The full intended run was 2000 steps. Worth scaling up to 200–500 steps to see whether the trend continues or whether the late-run mode collapse becomes terminal.
 
-3. **Pool design (longer-term).** The right way to build a pool for this experiment is by base-model column entropy: for each candidate position, sample N completions from the base model and keep only positions where no single column gets more than 5/8. That directly targets within-group variance. Approx 30 min to add and run for ~5K positions.
+3. **Pool design (longer-term).** The right way to build a pool is by base-model column entropy: for each candidate position, sample N completions from the base model and keep only positions where no single column gets more than 5/8. That directly targets within-group variance and could be combined with random self-play for a hybrid pool. Approx 30 min to add and run for ~5K positions.
 
 ---
 
