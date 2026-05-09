@@ -25,6 +25,13 @@ from faithfulness.eval.evaluator import evaluate_checkpoint
 from faithfulness.prompt import SYSTEM_PROMPT
 
 
+def _resolve_tinker_value(value):
+    result = getattr(value, "result", None)
+    if callable(result):
+        return result()
+    return value
+
+
 def _build_local_sample_fn(model_path: str, max_new_tokens: int, temperature: float):
     """Adapt eval.model_loader.create_model_fn (single-prompt) into the
     sample_fn(messages, n) -> list[str] contract this module expects.
@@ -59,40 +66,49 @@ def _build_tinker_sample_fn(
     base_url: str,
     max_new_tokens: int,
     base_model: str,
+    temperature: float,
 ):
     """Adapt a Tinker sampling client.
 
     Imports tinker lazily so the module loads without the dependency.
     """
     import tinker  # type: ignore[import-not-found]
-    from transformers import AutoTokenizer
+    from tinker_cookbook.renderers import get_renderer, get_text_content
 
     service_kwargs = {}
     if base_url is not None:
         service_kwargs["base_url"] = base_url
     service_client = tinker.ServiceClient(**service_kwargs)
-    sampling_client = service_client.create_sampling_client(model_path=checkpoint_path)
-    sampling_params = tinker.types.SamplingParams(max_tokens=max_new_tokens)
-    tokenizer = AutoTokenizer.from_pretrained(base_model, trust_remote_code=True)
+    sampling_client = _resolve_tinker_value(
+        service_client.create_sampling_client(model_path=checkpoint_path)
+    )
+    tokenizer = sampling_client.get_tokenizer()
+    renderer = get_renderer("qwen3_instruct", tokenizer, model_name=base_model)
+    sampling_params = tinker.SamplingParams(
+        max_tokens=max_new_tokens,
+        stop=renderer.get_stop_sequences(),
+        temperature=temperature,
+    )
 
     def sample_fn(messages: List[dict], num_samples: int) -> List[str]:
-        prompt = tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True,
+        prompt = renderer.build_generation_prompt(messages)
+        result = _resolve_tinker_value(
+            sampling_client.sample(
+                prompt=prompt,
+                num_samples=num_samples,
+                sampling_params=sampling_params,
+            )
         )
-        future = sampling_client.sample(
-            prompt=prompt,
-            num_samples=num_samples,
-            sampling_params=sampling_params,
-        )
-        result = future.result()
         out = []
         for seq in result.sequences:
-            text = getattr(seq, "text", None)
-            if text is None:
-                text = tokenizer.decode(list(seq.tokens), skip_special_tokens=True)
-            out.append(text)
+            try:
+                parsed_message, ok = renderer.parse_response(list(seq.tokens))
+                if ok:
+                    out.append(str(get_text_content(parsed_message)))
+                    continue
+            except Exception:
+                pass
+            out.append(tokenizer.decode(list(seq.tokens), skip_special_tokens=True))
         return out
 
     return sample_fn
@@ -138,6 +154,7 @@ def main() -> int:
             args.tinker_base_url,
             args.max_new_tokens,
             args.model_path or "Qwen/Qwen3-4B",
+            args.temperature,
         )
 
     solver = PonsSolver(strict=True)

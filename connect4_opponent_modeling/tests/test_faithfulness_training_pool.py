@@ -45,6 +45,16 @@ def test_env_round_trip():
         assert env.current_player() == rec["current_player"]
 
 
+def test_env_round_trip_ignores_entropy_metadata():
+    rec = generate_training_pool(n_positions=1, seed=4, max_games=20)[0]
+    rec["entropy_filter"] = {
+        "base_move_distribution": {"2": 0.5, "3": 0.5},
+        "most_common_move_pct": 0.5,
+    }
+    env = env_from_training_record(rec)
+    assert sorted(env.legal_moves()) == sorted(rec["legal_moves"])
+
+
 def test_target_per_tag_caps():
     cap = 5
     records = generate_training_pool(

@@ -49,11 +49,13 @@ faithfulness/
 │   └── trainer.py               # Tinker GRPO loop
 ├── eval/
 │   ├── board_generator.py       # stratified eval-set + lock_eval_set
+│   ├── entropy_pool.py          # base-model uncertainty filter for RL boards
 │   ├── training_pool.py         # large fast training-position generator
 │   ├── evaluator.py             # end-to-end checkpoint eval
 │   └── metrics.py               # 2x2 FaithfulnessMetrics
 ├── scripts/
 │   ├── generate_eval_set.py     # CLI to lock data/eval_boards.jsonl
+│   ├── generate_entropy_pool.py # CLI: data/entropy_training_positions.jsonl
 │   ├── generate_training_pool.py # CLI: data/training_positions.jsonl
 │   ├── eval_checkpoint.py       # CLI: --mode local | tinker
 │   └── train.py                 # CLI: Tinker GRPO entrypoint
@@ -66,15 +68,16 @@ faithfulness/
 | Dataset             | Path                            | Size    | Pons cached? | Mutable? |
 | ------------------- | ------------------------------- | ------- | ------------ | -------- |
 | Eval set            | `data/eval_boards.jsonl`        | 250-500 | yes          | locked   |
-| Training pool       | `data/training_positions.jsonl` | 50K-100K| no           | regen ok |
+| Tactical pool       | `data/training_positions.jsonl` | 50K-100K| no           | regen ok |
+| Entropy pool        | `data/entropy_training_positions.jsonl` | 5K-50K | no | regen ok |
 
 The eval set is small, expensive (Pons score per position), and locked.
-The training pool is large, cheap (deterministic strategic-tag metadata
-only — no solver calls during generation), and regenerable. The RL trainer
-loads `training_positions.jsonl` when present and otherwise falls back to a
-seeded random-position pool. It calls Pons on the fly for the regret reward.
-Pre-scoring 100K positions would be wasteful when only a fraction are sampled
-per run. Both JSONL files are ignored by git; regenerate them locally before
+The old tactical pool is large and cheap, but it selects boards where the
+solver has simple tactical structure, not necessarily boards where the model
+is uncertain. For GRPO, prefer the entropy pool: it keeps boards where the
+frozen base model samples multiple legal moves and the solver says those
+moves differ in value. The RL trainer calls Pons on the fly for the regret
+reward. JSONL data files are ignored by git; regenerate them locally before
 running training/eval.
 
 Training-pool record:
@@ -123,7 +126,22 @@ deny opponent → center → closest-to-center safe move. Useful as:
 
 ## Workflow
 
-0. **Generate the training pool** (regenerable, fast, no solver):
+0. **Generate the entropy training pool** (regenerable; spends Tinker sampling
+   only when explicitly run):
+   ```bash
+   python -m faithfulness.scripts.generate_entropy_pool \
+       --output faithfulness/data/entropy_training_positions.jsonl \
+       --n-positions 5000 --candidate-games 3000 \
+       --model Qwen/Qwen3-4B-Instruct-2507 \
+       --renderer qwen3_instruct \
+       --backend tinker --samples-per-board 8
+   ```
+   This is the recommended pool for GRPO. It filters for base-model move
+   entropy (`most_common_move_pct <= 0.625`) and meaningful solver spread
+   (`solver_score_spread >= 0.5`).
+
+   The older tactical pool remains available for targeted analysis, but it
+   should not be treated as a GRPO learning-signal fix:
    ```bash
    python -m faithfulness.scripts.generate_training_pool \
        --output faithfulness/data/training_positions.jsonl \
@@ -166,6 +184,9 @@ deny opponent → center → closest-to-center safe move. Useful as:
        --renderer qwen3_instruct \
        --condition claims_rationale \
        --n-steps 2000 --batch-size 32 --group-size 8 \
+       --training-pool-path faithfulness/data/entropy_training_positions.jsonl \
+       --target-accepted-groups 24 --candidate-batch-multiplier 4 \
+       --max-group-attempts 4 \
        --max-tokens 1024 \
        --log-path faithfulness/data/runs/claims_rationale
    ```
@@ -177,6 +198,18 @@ deny opponent → center → closest-to-center safe move. Useful as:
 
    Add `--truth-lambda 0.3` for the optional reward-shaping ablation that
    adds `+ λ * mean(claim_truth)` to per-rollout reward.
+
+   Every run writes `config.json` with the git commit, pool/eval hashes, model,
+   renderer, seed, temperature settings, and accepted-group settings. Training
+   logs distinguish `candidate_groups`, `accepted_groups`,
+   `zero_variance_groups`, and `identical_move_groups`; a skipped group means
+   the sampled completions agreed in reward, not that the move was correct.
+
+   Optional cheap checkpoint smoke eval:
+   ```bash
+   ... --fast-eval-every 100 --fast-eval-n-boards 25
+   ```
+   This appends no-causal held-out move-quality summaries to `eval_log.jsonl`.
 
 4. **Evaluate a Tinker checkpoint**:
    ```bash
@@ -240,7 +273,7 @@ move the model is considering. See `claims.py` for the docstring and
 python -m pytest tests/test_faithfulness_*.py
 ```
 
-77 tests covering claims, parsing, strategic-move classifier, verifier
+87 tests covering claims, parsing, strategic-move classifier, verifier
 (golden positions), move evaluator, interventions, causal pipeline
 (deterministic stub generator — no real model), reward calculator, metrics,
 board generator, Tinker datum alignment, and training pool.

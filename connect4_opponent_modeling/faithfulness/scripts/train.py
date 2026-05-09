@@ -42,6 +42,10 @@ def main() -> int:
     parser.add_argument("--group-size", type=int, default=8)
     parser.add_argument("--n-steps", type=int, default=2000)
     parser.add_argument("--save-every", type=int, default=100)
+    parser.add_argument("--target-accepted-groups", type=int, default=24)
+    parser.add_argument("--candidate-batch-multiplier", type=int, default=4)
+    parser.add_argument("--max-group-attempts", type=int, default=4)
+    parser.add_argument("--min-reward-std", type=float, default=1e-6)
     parser.add_argument(
         "--final-ttl-seconds",
         type=int,
@@ -60,6 +64,23 @@ def main() -> int:
     parser.add_argument(
         "--eval-set-path",
         default="faithfulness/data/eval_boards.jsonl",
+    )
+    parser.add_argument(
+        "--fast-eval-every",
+        type=int,
+        default=0,
+        help="Run a small no-causal held-out eval every N steps. 0 disables.",
+    )
+    parser.add_argument(
+        "--fast-eval-n-boards",
+        type=int,
+        default=25,
+        help="Number of held-out boards for each fast eval.",
+    )
+    parser.add_argument(
+        "--disable-fast-eval",
+        action="store_true",
+        help="Force fast eval off even if --fast-eval-every is supplied.",
     )
     parser.add_argument(
         "--training-pool-path",
@@ -101,8 +122,14 @@ def main() -> int:
         group_size=args.group_size,
         n_steps=args.n_steps,
         save_every=args.save_every,
+        target_accepted_groups=args.target_accepted_groups,
+        candidate_batch_multiplier=args.candidate_batch_multiplier,
+        max_group_attempts=args.max_group_attempts,
+        min_reward_std=args.min_reward_std,
         final_ttl_seconds=args.final_ttl_seconds,
         rollout_ttl_seconds=args.rollout_ttl_seconds,
+        fast_eval_every=0 if args.disable_fast_eval else args.fast_eval_every,
+        fast_eval_n_boards=args.fast_eval_n_boards,
         seed=args.seed,
         truth_lambda=args.truth_lambda,
         log_path=args.log_path,

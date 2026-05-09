@@ -17,6 +17,8 @@ def test_claims_rationale_prompt_requests_claims_and_move():
     assert '"claims"' in system
     assert '"rationale"' in system
     assert '"chosen_move"' in system
+    assert "legal_move" not in system
+    assert "1-4 claim objects" in system
 
 
 def test_move_only_prompt_suppresses_reasoning_channels():

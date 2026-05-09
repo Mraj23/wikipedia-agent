@@ -9,9 +9,9 @@ Four 50-step pilots run on Tinker (Qwen3-4B-Instruct-2507, claims_rationale cond
 | v1 | random self-play (fallback) | raw mean-center | off | Marginal — no clear trend, but variance OK |
 | v2 | tactical-stratified (25K) | raw mean-center | on | **Worse** — severe mode collapse |
 | v3 | tactical-stratified (25K) | **standardized** | on | Same as v2 — standardization alone insufficient |
-| v4 | random self-play (fallback) | **standardized** | on | **Working baseline** — best on every metric, only run with rising optimal_rate |
+| v4 | random self-play (fallback) | **standardized** | on | **Incomplete/fragile** — early signal improved, but collapse still returned |
 
-**Headline finding:** the tactical-stratified pool was the dominant cause of the failure, not the trainer's gradient math. Tactical positions have a clear correct answer; once the model agrees with itself across 8 completions, GRPO has zero variance and skips the group. The "fix" we thought we needed (advantage standardization) was a real bug worth fixing on its own merits but did not rescue the run on its own.
+**Headline finding:** the tactical-stratified pool was the dominant cause of the failure, not the trainer's gradient math. Tactical positions often make the model agree with itself across 8 completions, so GRPO has zero variance and skips the group. That agreement is **not** correctness: optimal rate stayed around 35-40%, so confidently wrong skipped groups are a live failure mode. The "fix" we thought we needed (advantage standardization) was a real bug worth fixing on its own merits but did not rescue the run on its own.
 
 ---
 
@@ -42,7 +42,7 @@ last-10         -               0.959           0.959           0.850
 
 (`unique_moves` and `most_common_move_pct` were added in this session, so v1 has no values for them.)
 
-**The cleanest learning signal is `optimal_rate`'s trajectory.** v1, v2, v3 all *declined* across the run (model got worse). v4 *rose* (0.418 first-10 → 0.439 last-10). That's the first directional evidence that any pilot is learning the task at all.
+**The cleanest learning signal is held-out eval, which these pilots did not run.** Training-step `optimal_rate` is useful instrumentation, but it is pool-dependent and can move with the sampled boards. V4's positive direction is encouraging, not sufficient evidence of a working trainer.
 
 ---
 
@@ -58,7 +58,7 @@ Replacing `r - mean` with `(r - mean) / (std + 1e-8)` via the existing `spiral.r
 
 ### 3. Reverting to random self-play in v4
 
-V4 finished as the only pilot that learns. Headline numbers: `optimal_rate` 0.418 → 0.439 across the run (v1/v2/v3 all dropped); `mean_reward` -0.496 → -0.435 (v1/v2/v3 all flat-or-declining); best mean across all metrics. Mode collapse still creeps in late (skipped groups 13.6 → 26.4, unique moves 6.4 → 3.9), so v4 is not a finished trainer — but it's the first configuration that produces a positive-direction signal at all. **Random pool + standardized advantages is the configuration to build the formal v0 from.**
+V4 produced the first positive-direction training signal, but it was not a finished solution. Mode collapse still crept in late (skipped groups 13.6 → 26.4, unique moves 6.4 → 3.9), and the run did not include held-out checkpoint eval. Treat random pool + standardized advantages as a clue, not the formal v0.
 
 ### 4. Stratified pool generator (`--mix tactical`)
 
@@ -76,7 +76,7 @@ The original failure diagnosis hypothesized that GRPO was starving for variance 
 - v2 (tactical): 24.6 skipped groups/step → 7.4 useful groups/step.
 - v3 (tactical, gradient bug fixed): 26.5 skipped groups/step → 5.5 useful groups/step.
 
-**Why the hypothesis was wrong:** a `must_block_threat` position has *one* correct column. The base model usually finds it. All 8 completions pick the same column → identical reward → zero variance → skipped group. The skip was a correctness signal, not noise. In v2/v3 the model learned the right move on most groups *and* lost the gradient signal needed to learn anything else.
+**Why the hypothesis was wrong:** a `must_block_threat` position often funnels generations toward one column. All 8 completions can pick the same column → identical reward → zero variance → skipped group. The skip is an agreement signal, not a correctness signal. With optimal rate still near 35-40%, "confidently wrong" is a live failure mode.
 
 The framing should have been "positions where the model is uncertain," not "positions where the solver has a clear preference." Those are different sets, and the deterministic strategic-tag classifier captures the second, not the first.
 
@@ -100,14 +100,11 @@ Of the original five suggested fixes:
 
 ## Things to pin down before the next pilot
 
-1. **V4's late-run mode collapse is the next bottleneck.** Skipped groups 13.6 → 26.4 over 50 steps, unique moves 6.4 → 3.9. The policy is sharpening on the few groups that do produce gradient, and that sharpening narrows the column distribution further. Single-variable next change candidates, ranked:
-   - `--group-size 16` (matches working `tinker_train.py`; halves variance noise on per-group advantage estimates).
-   - Higher `--temperature-max` (e.g., 2.0) — cheap, may not help much given the rationale-tokens-determine-column structure of `claims_rationale`.
-   - Surgical alternative: apply temperature only to the chosen-column token. Trainer change required.
+1. **Build an entropy-filtered pool before more paid training.** For each candidate board, sample N completions from the frozen base model and keep only positions where no single column gets more than 5/8 and solver score spread is meaningful. That directly targets within-group variance.
 
-2. **Run for more than 50 steps.** V4 is still in its early phase of learning at step 50. The full intended run was 2000 steps. Worth scaling up to 200–500 steps to see whether the trend continues or whether the late-run mode collapse becomes terminal.
+2. **Train with fixed accepted groups per step.** Oversample candidate boards and train only on groups with nonzero reward variance, logging `candidate_groups`, `accepted_groups`, `zero_variance_groups`, and `identical_move_groups`.
 
-3. **Pool design (longer-term).** The right way to build a pool is by base-model column entropy: for each candidate position, sample N completions from the base model and keep only positions where no single column gets more than 5/8. That directly targets within-group variance and could be combined with random self-play for a hybrid pool. Approx 30 min to add and run for ~5K positions.
+3. **Run held-out move-quality eval after checkpoints.** Training-step rewards are too noisy and pool-dependent to establish improvement on their own.
 
 ---
 
@@ -119,10 +116,14 @@ Committed in `58d9dc4` ("Fix faithfulness GRPO trainer and add stratified pool g
 - `faithfulness/scripts/generate_training_pool.py`: `--mix tactical` preset for per-tag targets (kept; useful infrastructure even if the tactical-heavy mix wasn't the right answer for this experiment).
 - `faithfulness/scripts/train.py`: exposed `--temperature`, `--temperature-max`, `--temperature-diversity-threshold`.
 
+Follow-up changes should add entropy-pool generation, accepted-group batching,
+run provenance snapshots, and held-out fast eval before any additional paid
+Tinker pilot.
+
 ## Run artifacts
 
 - `faithfulness/data/runs/pilot50_claims_20260508/` — v1 baseline (pre-session).
 - `faithfulness/data/runs/pilot50_claims_v2_20260508/` — tactical pool + dyn temp + raw adv.
 - `faithfulness/data/runs/pilot50_claims_v3_20260508/` — tactical pool + dyn temp + standardized adv.
-- `faithfulness/data/runs/pilot50_claims_v4_20260508/` — random pool + dyn temp + standardized adv (in progress).
+- `faithfulness/data/runs/pilot50_claims_v4_20260508/` — random pool + dyn temp + standardized adv (fragile; collapse still rising late).
 - `faithfulness/data/training_positions.jsonl` — 25K-position tactical-stratified pool (kept; not regenerable without the seed but cheap to rebuild).

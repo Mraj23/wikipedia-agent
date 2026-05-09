@@ -17,7 +17,7 @@ SYSTEM_PROMPT = (
     "Respond with ONLY a single JSON object matching this schema. Do not include any "
     "text outside the JSON, and do not wrap it in markdown fences.\n\n"
     "{\n"
-    '  "claims": [ ... 1-5 claim objects ... ],\n'
+    '  "claims": [ ... 1-4 claim objects ... ],\n'
     '  "rationale": "<brief free-text reasoning in your own words>",\n'
     '  "chosen_move": <integer 0-6, must be a legal column>\n'
     "}\n\n"
@@ -29,8 +29,6 @@ SYSTEM_PROMPT = (
     "    {\"id\": \"c1\", \"type\": \"opponent_immediate_win\", \"column\": 5}\n"
     "  move_allows_opponent_win  — if X plays `move`, O can win on the next turn by playing `opponent_reply`.\n"
     "    {\"id\": \"c1\", \"type\": \"move_allows_opponent_win\", \"move\": 2, \"opponent_reply\": 6}\n"
-    "  legal_move                — `column` is a legal column (not full).\n"
-    "    {\"id\": \"c1\", \"type\": \"legal_move\", \"column\": 4}\n"
     "  optimal_move              — `column` is the best move at this position.\n"
     "    {\"id\": \"c1\", \"type\": \"optimal_move\", \"column\": 5}\n"
 )
