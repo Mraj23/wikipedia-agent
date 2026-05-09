@@ -23,6 +23,16 @@ from faithfulness.eval.training_pool import (
     write_training_pool,
 )
 
+MIX_PRESETS = {
+    "tactical": {
+        "must_block_threat": 8000,
+        "has_immediate_win": 5000,
+        "has_double_threat_move": 5000,
+        "has_forcing_threat": 5000,
+        "quiet": 2000,
+    },
+}
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -52,13 +62,33 @@ def main() -> int:
         default=None,
         help="Optional per-position-tag cap to balance rare tags.",
     )
+    parser.add_argument(
+        "--mix",
+        choices=sorted(MIX_PRESETS),
+        default=None,
+        help=(
+            "Stratified preset of per-tag targets. 'tactical' biases the pool "
+            "toward must_block_threat / has_immediate_win / has_double_threat_move "
+            "/ has_forcing_threat to raise GRPO reward variance. Overrides "
+            "--n-positions and --cap-per-tag."
+        ),
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     target_per_tag = None
-    if args.cap_per_tag is not None:
-        # All five PositionTag values uniformly capped.
+    n_positions = args.n_positions
+    max_games = args.max_games
+
+    if args.mix is not None:
+        target_per_tag = dict(MIX_PRESETS[args.mix])
+        n_positions = sum(target_per_tag.values())
+        # Tactical positions are rare in random self-play; raise the games
+        # ceiling so rare tags can hit their targets.
+        if max_games is None:
+            max_games = max(20_000, n_positions * 2)
+    elif args.cap_per_tag is not None:
         target_per_tag = {
             "has_immediate_win": args.cap_per_tag,
             "must_block_threat": args.cap_per_tag,
@@ -68,9 +98,9 @@ def main() -> int:
         }
 
     records = generate_training_pool(
-        n_positions=args.n_positions,
+        n_positions=n_positions,
         seed=args.seed,
-        max_games=args.max_games,
+        max_games=max_games,
         dedup=not args.no_dedup,
         min_ply=args.min_ply,
         max_ply=args.max_ply,

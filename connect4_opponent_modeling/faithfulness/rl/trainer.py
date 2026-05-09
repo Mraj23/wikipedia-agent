@@ -25,6 +25,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, List, Optional, Sequence, Tuple
 
+import torch
+
 from env.connect_four_env import ConnectFourEnv
 from env.pons_wrapper import PonsSolver
 from faithfulness.eval.board_generator import (
@@ -34,6 +36,7 @@ from faithfulness.eval.training_pool import env_from_training_record, load_train
 from faithfulness.parse import parse_structured_response
 from faithfulness.prompt import PromptCondition, make_messages
 from faithfulness.rl.reward import FaithfulnessRewardCalculator
+from spiral.rae import compute_advantages
 from faithfulness.rl.tinker_renderer import (
     RenderedPrompt,
     RolloutTokens,
@@ -80,6 +83,9 @@ class TrainerConfig:
     seed: int = 0
     train_pool_games: int = 2000
     truth_lambda: float = 0.0
+    temperature: float = 1.0
+    temperature_max: float = 1.5
+    temperature_diversity_threshold: float = 0.8
 
 
 @dataclass
@@ -194,10 +200,7 @@ async def _train_async(cfg: TrainerConfig) -> None:
     tokenizer = training_client.get_tokenizer()
     renderer = get_renderer(cfg.renderer, tokenizer, model_name=cfg.base_model)
 
-    sampling_params = tinker.SamplingParams(
-        max_tokens=cfg.max_tokens,
-        stop=renderer.get_stop_sequences(),
-    )
+    current_temperature = cfg.temperature
     adam_params = tinker.AdamParams(
         learning_rate=cfg.learning_rate,
         beta1=0.9,
@@ -218,6 +221,11 @@ async def _train_async(cfg: TrainerConfig) -> None:
 
     for step in range(cfg.n_steps):
         t0 = time.time()
+        sampling_params = tinker.SamplingParams(
+            max_tokens=cfg.max_tokens,
+            stop=renderer.get_stop_sequences(),
+            temperature=current_temperature,
+        )
         if hasattr(training_client, "save_weights_for_sampler_async"):
             save_result = await _resolve_tinker_result(
                 training_client.save_weights_for_sampler_async(
@@ -258,6 +266,7 @@ async def _train_async(cfg: TrainerConfig) -> None:
         generated_tokens = 0
         skipped_groups = 0
         sample_text = ""
+        step_moves: List[int] = []
 
         for env, prompt, response in zip(envs, prompts, sample_results):
             sequences = response.sequences
@@ -284,6 +293,8 @@ async def _train_async(cfg: TrainerConfig) -> None:
                 )
                 breakdown = reward_calc.compute(env, completion)
                 parsed = parse_structured_response(completion)
+                if parsed.chosen_move is not None:
+                    step_moves.append(parsed.chosen_move)
                 group_rewards.append(breakdown.reward)
                 rollouts.append(rollout)
                 per_position_metrics.append(
@@ -298,13 +309,18 @@ async def _train_async(cfg: TrainerConfig) -> None:
                     }
                 )
 
-            mean_r = statistics.fmean(group_rewards)
-            advantages = [r - mean_r for r in group_rewards]
-            # Skip groups with zero variance to avoid burning gradient on noise.
-            if max(advantages) - min(advantages) < 1e-8:
+            adv_tensor = compute_advantages(
+                rewards=group_rewards,
+                reward_components=None,
+                reward_weights={},
+                use_rae=False,
+            )
+            # Skip groups with zero variance: standardized advantages collapse to ~0.
+            if torch.all(torch.abs(adv_tensor) < 1e-8):
                 skipped_groups += 1
                 all_rewards.extend(group_rewards)
                 continue
+            advantages = adv_tensor.tolist()
             for rollout, adv in zip(rollouts, advantages):
                 rendered = RenderedPrompt(
                     text="",
@@ -371,6 +387,19 @@ async def _train_async(cfg: TrainerConfig) -> None:
             else 0.0
         )
         completion_count = len(per_position_metrics)
+
+        unique_moves = len(set(step_moves))
+        most_common_pct = (
+            max(step_moves.count(m) for m in set(step_moves)) / len(step_moves)
+            if step_moves
+            else 0.0
+        )
+        logged_temperature = current_temperature
+        if most_common_pct > cfg.temperature_diversity_threshold:
+            current_temperature = min(cfg.temperature_max, current_temperature + 0.1)
+        else:
+            current_temperature = max(cfg.temperature, current_temperature - 0.02)
+
         log_entry = {
             "step": step,
             "condition": cfg.condition,
@@ -386,6 +415,10 @@ async def _train_async(cfg: TrainerConfig) -> None:
             "mean_generated_tokens": generated_tokens / max(completion_count, 1),
             "datums": len(datums),
             "skipped_zero_variance_groups": skipped_groups,
+            "unique_moves": unique_moves,
+            "most_common_move_pct": most_common_pct,
+            "temperature": logged_temperature,
+            "next_temperature": current_temperature,
             "step_time_s": t_elapsed,
             "sample": sample_text,
         }

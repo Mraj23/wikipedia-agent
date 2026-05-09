@@ -65,6 +65,27 @@ def main() -> int:
         "--training-pool-path",
         default="faithfulness/data/training_positions.jsonl",
     )
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=1.0,
+        help="Base sampling temperature. Floor for the dynamic-temperature decay.",
+    )
+    parser.add_argument(
+        "--temperature-max",
+        type=float,
+        default=1.5,
+        help="Cap for dynamic-temperature bumps when most_common_move_pct exceeds threshold.",
+    )
+    parser.add_argument(
+        "--temperature-diversity-threshold",
+        type=float,
+        default=0.8,
+        help=(
+            "If the fraction of completions choosing the most-common column "
+            "exceeds this in a step, temperature is bumped by +0.1."
+        ),
+    )
     args = parser.parse_args()
 
     cfg = TrainerConfig(
@@ -87,6 +108,9 @@ def main() -> int:
         log_path=args.log_path,
         eval_set_path=args.eval_set_path,
         training_pool_path=args.training_pool_path,
+        temperature=args.temperature,
+        temperature_max=args.temperature_max,
+        temperature_diversity_threshold=args.temperature_diversity_threshold,
     )
     train(cfg)
     return 0
