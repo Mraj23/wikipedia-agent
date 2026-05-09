@@ -28,7 +28,11 @@ from faithfulness.causal.interventions import (
     InterventionMeta,
     apply_intervention,
 )
-from faithfulness.claims import Claim
+from faithfulness.claims import (
+    CLAIM_TYPE_TO_TACTICAL_FIELD,
+    Claim,
+    ClaimType,
+)
 from faithfulness.parse import ParsedResponse, parse_structured_response
 from faithfulness.prompt import make_prefix_move_messages
 from faithfulness.verifier.claim_verifier import verify_claims
@@ -68,6 +72,30 @@ class ResponseCausalResult:
 
 
 def _analysis_to_json(claims: List[Claim], rationale: str) -> str:
+    """Serialize a (possibly mutated) analysis prefix back to JSON.
+
+    If the claim list is the tactical-set family, emit the fixed
+    `tactical_claims` object so the prefix retains the same schema the model
+    just produced. Otherwise emit the legacy {claims, rationale} wrapper.
+    """
+    if claims and all(c.type in CLAIM_TYPE_TO_TACTICAL_FIELD for c in claims):
+        obj: dict = {}
+        for c in claims:
+            field_name = CLAIM_TYPE_TO_TACTICAL_FIELD[c.type]
+            if c.type is ClaimType.SET_UNSAFE_MOVES:
+                obj[field_name] = list(c.fields.get("entries", []))
+            else:
+                obj[field_name] = list(c.fields.get("values", []))
+        # Ensure all five fields are present even after deletion-as-empty.
+        for field_name in (
+            "self_immediate_win_columns",
+            "opponent_immediate_win_columns",
+            "unsafe_moves",
+            "self_double_threat_moves",
+            "self_single_threat_moves",
+        ):
+            obj.setdefault(field_name, [])
+        return json.dumps({"tactical_claims": obj}, indent=2)
     return json.dumps(
         {
             "claims": [c.to_dict() for c in claims],

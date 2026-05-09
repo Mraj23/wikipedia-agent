@@ -83,6 +83,7 @@ def evaluate_checkpoint(
     n_resamples: int = DEFAULT_N_RESAMPLES,
     threshold: float = DEFAULT_THRESHOLD,
     seed: int = 0,
+    condition: str = "claims_rationale",
 ) -> EvalResult:
     rng = random.Random(seed)
     items = load_eval_set(eval_set_path)
@@ -94,10 +95,10 @@ def evaluate_checkpoint(
         category = item.get("category", "unknown")
         env = env_from_record(item)
 
-        messages = make_messages(env)
+        messages = make_messages(env, condition)
         completions = sample_fn(messages, 1)
         raw = completions[0] if completions else ""
-        parsed = parse_structured_response(raw)
+        parsed = parse_structured_response(raw, condition=condition)
 
         chosen = parsed.chosen_move
         if chosen is not None and chosen in env.legal_moves():

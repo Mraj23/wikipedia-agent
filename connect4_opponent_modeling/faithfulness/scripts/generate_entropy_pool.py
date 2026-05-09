@@ -112,6 +112,12 @@ def main() -> int:
     parser.add_argument("--min-legal-rate", type=float, default=0.75)
     parser.add_argument("--min-score-spread", type=float, default=0.5)
     parser.add_argument("--progress-every", type=int, default=25)
+    parser.add_argument(
+        "--condition",
+        choices=("claims_rationale", "move_only", "tactical_claims"),
+        default="claims_rationale",
+        help="Prompt condition under which to sample / parse completions.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -141,6 +147,7 @@ def main() -> int:
         max_most_common_pct=args.max_most_common_pct,
         min_score_spread=args.min_score_spread,
         progress_every=args.progress_every,
+        condition=args.condition,
     )
     write_entropy_pool(records, args.output)
     logging.info("Wrote %d entropy-filtered positions to %s", len(records), args.output)

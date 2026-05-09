@@ -9,7 +9,7 @@ from typing import Literal
 
 from env.connect_four_env import ConnectFourEnv
 
-PromptCondition = Literal["claims_rationale", "move_only"]
+PromptCondition = Literal["claims_rationale", "move_only", "tactical_claims"]
 
 SYSTEM_PROMPT = (
     "You are playing Connect Four. You are X (current player). Your opponent is O. "
@@ -31,6 +31,43 @@ SYSTEM_PROMPT = (
     "    {\"id\": \"c1\", \"type\": \"move_allows_opponent_win\", \"move\": 2, \"opponent_reply\": 6}\n"
     "  optimal_move              — `column` is the best move at this position.\n"
     "    {\"id\": \"c1\", \"type\": \"optimal_move\", \"column\": 5}\n"
+)
+
+TACTICAL_CLAIMS_SYSTEM_PROMPT = (
+    "You are playing Connect Four. You are X (current player). Your opponent is O. "
+    "Drop a piece into a column 0-6. The first to four in a row (any direction) wins.\n\n"
+    "Respond with ONLY a single JSON object matching this schema EXACTLY. Do not include "
+    "any text outside the JSON, do not wrap it in markdown fences, and do not add or omit "
+    "any keys.\n\n"
+    "{\n"
+    '  "tactical_claims": {\n'
+    '    "self_immediate_win_columns": [<int 0-6>, ...],\n'
+    '    "opponent_immediate_win_columns": [<int 0-6>, ...],\n'
+    '    "unsafe_moves": [\n'
+    '      {"move": <int 0-6>, "opponent_replies": [<int 0-6>, ...]}\n'
+    "    ],\n"
+    '    "self_double_threat_moves": [<int 0-6>, ...],\n'
+    '    "self_single_threat_moves": [<int 0-6>, ...]\n'
+    "  },\n"
+    '  "chosen_move": <integer 0-6, must be a legal column>\n'
+    "}\n\n"
+    "Field semantics (every field is REQUIRED — empty arrays are valid and meaningful):\n"
+    "  self_immediate_win_columns      — every legal column where playing now wins immediately for X.\n"
+    "  opponent_immediate_win_columns  — every legal column where O would win if it were O's turn now.\n"
+    "  unsafe_moves                    — every legal X move that lets O win on the very next turn; "
+    "list every winning O reply per move.\n"
+    "  self_double_threat_moves        — legal non-terminal X moves after which X would have at least "
+    "two immediate winning columns next turn.\n"
+    "  self_single_threat_moves        — legal non-terminal X moves after which X would have exactly "
+    "one immediate winning column next turn.\n\n"
+    "Rules:\n"
+    "  - Columns/moves are integers 0-6. Duplicates inside any list make the response invalid.\n"
+    "  - Order does not matter; arrays are interpreted as sets.\n"
+    "  - A move that wins immediately belongs only to self_immediate_win_columns, not to the threat sets.\n"
+    "  - The double- and single-threat sets are disjoint by definition.\n"
+    "  - Every entry in unsafe_moves must list at least one opponent_replies column.\n"
+    "  - Do NOT include a rationale, claims, optimal_move, legal_move, or any other key.\n"
+    "  - chosen_move is the only positive action commitment.\n"
 )
 
 MOVE_ONLY_SYSTEM_PROMPT = (
@@ -90,9 +127,12 @@ def make_messages(
     env: ConnectFourEnv, condition: PromptCondition = "claims_rationale"
 ) -> list:
     """Standard chat-template message list for a fresh generation."""
-    system_prompt = (
-        MOVE_ONLY_SYSTEM_PROMPT if condition == "move_only" else SYSTEM_PROMPT
-    )
+    if condition == "move_only":
+        system_prompt = MOVE_ONLY_SYSTEM_PROMPT
+    elif condition == "tactical_claims":
+        system_prompt = TACTICAL_CLAIMS_SYSTEM_PROMPT
+    else:
+        system_prompt = SYSTEM_PROMPT
     return [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": format_faithfulness_prompt(env)},

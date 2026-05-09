@@ -125,6 +125,11 @@ def main() -> int:
     )
     parser.add_argument("--max-new-tokens", type=int, default=384)
     parser.add_argument("--temperature", type=float, default=0.7)
+    parser.add_argument(
+        "--condition",
+        choices=("claims_rationale", "move_only", "tactical_claims"),
+        default="claims_rationale",
+    )
     parser.add_argument("--no-causal", action="store_true")
     parser.add_argument("--n-resamples", type=int, default=30)
     parser.add_argument("--threshold", type=float, default=0.25)
@@ -165,6 +170,7 @@ def main() -> int:
         run_causal=not args.no_causal,
         n_resamples=args.n_resamples,
         threshold=args.threshold,
+        condition=args.condition,
     )
 
     out = Path(args.output)

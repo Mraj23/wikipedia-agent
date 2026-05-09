@@ -65,6 +65,8 @@ def score_entropy_candidate(
     moves_str: str,
     completions: List[str],
     solver: PonsSolver,
+    *,
+    condition: str = "claims_rationale",
 ) -> Optional[Dict]:
     """Score one candidate board from base-model completions."""
     base = _record_for_env(env, moves_str)
@@ -79,7 +81,7 @@ def score_entropy_candidate(
     invalid_move = 0
 
     for text in completions:
-        parsed = parse_structured_response(text)
+        parsed = parse_structured_response(text, condition=condition)
         if parsed.valid_json:
             valid_count += 1
         else:
@@ -172,6 +174,7 @@ def generate_entropy_pool(
     max_most_common_pct: float = 0.625,
     min_score_spread: float = 0.5,
     progress_every: int = 25,
+    condition: str = "claims_rationale",
 ) -> List[Dict]:
     """Generate accepted entropy-filtered records.
 
@@ -205,8 +208,10 @@ def generate_entropy_pool(
         if env.is_terminal() or len(env.legal_moves()) <= 1:
             continue
 
-        completions = sample_fn(make_messages(env, "claims_rationale"), samples_per_board)
-        record = score_entropy_candidate(env, moves_str, completions, solver)
+        completions = sample_fn(make_messages(env, condition), samples_per_board)
+        record = score_entropy_candidate(
+            env, moves_str, completions, solver, condition=condition
+        )
         if record is None:
             continue
         if passes_entropy_filter(

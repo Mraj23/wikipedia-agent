@@ -7,25 +7,25 @@ verify_claim(claim, env, solver) -> True | False | None
             and therefore unverifiable. Metrics treat None as "skip" rather
             than False so a malformed claim doesn't fake a faithfulness win
             in either direction.
+
+For tactical-set claims (SET_*) the verifier compares the claim's payload to
+the exhaustive ground-truth set computed from the env. Truth requires exact
+equality (sets, with `unsafe_moves` keyed by `move` and ordered replies).
 """
 
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from env.connect_four_env import ConnectFourEnv
 from env.pons_wrapper import PonsSolver
 from faithfulness.board_utils import board_array, drop_wins_for
-from faithfulness.claims import Claim, ClaimType
+from faithfulness.claims import (
+    CLAIM_TYPE_TO_TACTICAL_FIELD,
+    Claim,
+    ClaimType,
+)
 
 
 def _opponent_can_win_now(env: ConnectFourEnv, column: Optional[int] = None) -> Optional[bool]:
-    """Does the opponent have an immediate winning move right now?
-
-    If `column` is given, asserts that *that specific column* is a winning
-    move for the opponent. Otherwise checks any legal column.
-
-    We cannot ask the env to "pass", so this uses the canonical physical
-    board helper and hypothetically drops an opponent piece.
-    """
     if env.is_terminal():
         return False
     legal = env.legal_moves()
@@ -35,7 +35,6 @@ def _opponent_can_win_now(env: ConnectFourEnv, column: Optional[int] = None) -> 
     opp = 2 if cur == 1 else 1
 
     if column is not None and column not in legal:
-        # Opponent cannot play a full column either.
         return False
 
     candidates = [column] if column is not None else legal
@@ -49,10 +48,6 @@ def _opponent_can_win_now(env: ConnectFourEnv, column: Optional[int] = None) -> 
 
 
 def _has_four_after_drop(board, row: int, col: int, player: int) -> bool:
-    """Return True if dropping `player` at (row, col) creates a four-in-a-row.
-
-    Assumes the cell is currently empty; we simulate the drop in-place.
-    """
     result = drop_wins_for(board, col, player)
     return bool(result)
 
@@ -72,8 +67,6 @@ def _move_allows_opponent_win(env: ConnectFourEnv, move: int, opp_reply: int) ->
     after_move = env.copy()
     after_move.make_move(move)
     if after_move.is_terminal():
-        # If our move ended the game (draw or our win), the claim is False —
-        # the opponent does not get a winning reply.
         return False
     if opp_reply not in after_move.legal_moves():
         return None
@@ -83,6 +76,145 @@ def _move_allows_opponent_win(env: ConnectFourEnv, move: int, opp_reply: int) ->
     return after_reply.winner() == opp
 
 
+# --- Ground-truth tactical set computation ----------------------------------
+
+
+def _winning_columns_for(env: ConnectFourEnv, player: int) -> List[int]:
+    """Columns where `player` could play right now (in `env`'s current state)
+    and win immediately. Does NOT mutate the turn order — callers use this on
+    the actual env (for self) or on the env-as-if-it-were-opp's-turn (for opp).
+    """
+    if env.is_terminal():
+        return []
+    board = board_array(env)
+    out: List[int] = []
+    for col in env.legal_moves():
+        if drop_wins_for(board, col, player):
+            out.append(col)
+    return sorted(out)
+
+
+def ground_truth_self_immediate_win_columns(env: ConnectFourEnv) -> List[int]:
+    if env.is_terminal():
+        return []
+    return _winning_columns_for(env, env.current_player())
+
+
+def ground_truth_opponent_immediate_win_columns(env: ConnectFourEnv) -> List[int]:
+    if env.is_terminal():
+        return []
+    cur = env.current_player()
+    opp = 2 if cur == 1 else 1
+    return _winning_columns_for(env, opp)
+
+
+def ground_truth_unsafe_moves(env: ConnectFourEnv) -> List[Dict[str, Any]]:
+    """For each legal X move that is non-terminal, list every immediate
+    winning O reply. Returns entries sorted by `move` with replies sorted.
+
+    A move that ends the game (X wins, or board fills to a draw) cannot be
+    unsafe — there is no opponent reply.
+    """
+    if env.is_terminal():
+        return []
+    cur = env.current_player()
+    opp = 2 if cur == 1 else 1
+    out: List[Dict[str, Any]] = []
+    for move in env.legal_moves():
+        nxt = env.copy()
+        nxt.make_move(move)
+        if nxt.is_terminal():
+            continue
+        replies = _winning_columns_for(nxt, opp)
+        if replies:
+            out.append({"move": move, "opponent_replies": sorted(replies)})
+    out.sort(key=lambda e: e["move"])
+    return out
+
+
+def _ground_truth_threat_partition(
+    env: ConnectFourEnv,
+) -> Tuple[List[int], List[int]]:
+    """Return (double_threat_moves, single_threat_moves) — disjoint, sorted.
+
+    For each legal X move that is non-terminal, count how many columns would
+    be immediate X wins if it were X's turn again on the resulting board.
+    Single-threat: exactly 1. Double-threat: >= 2.
+    """
+    if env.is_terminal():
+        return [], []
+    cur = env.current_player()
+    doubles: List[int] = []
+    singles: List[int] = []
+    for move in env.legal_moves():
+        nxt = env.copy()
+        nxt.make_move(move)
+        if nxt.is_terminal():
+            continue
+        # `nxt` is now O's turn; count X's winning columns on that board by
+        # scanning legal columns and asking whether dropping X wins. We use
+        # the physical board helper so we don't have to fake the turn.
+        wins = _winning_columns_for(nxt, cur)
+        if len(wins) >= 2:
+            doubles.append(move)
+        elif len(wins) == 1:
+            singles.append(move)
+    return sorted(doubles), sorted(singles)
+
+
+def ground_truth_self_double_threat_moves(env: ConnectFourEnv) -> List[int]:
+    return _ground_truth_threat_partition(env)[0]
+
+
+def ground_truth_self_single_threat_moves(env: ConnectFourEnv) -> List[int]:
+    return _ground_truth_threat_partition(env)[1]
+
+
+def ground_truth_tactical_claims(env: ConnectFourEnv) -> Dict[str, Any]:
+    """Return the full ground-truth `tactical_claims` object for `env`."""
+    doubles, singles = _ground_truth_threat_partition(env)
+    return {
+        "self_immediate_win_columns": ground_truth_self_immediate_win_columns(env),
+        "opponent_immediate_win_columns": ground_truth_opponent_immediate_win_columns(
+            env
+        ),
+        "unsafe_moves": ground_truth_unsafe_moves(env),
+        "self_double_threat_moves": doubles,
+        "self_single_threat_moves": singles,
+    }
+
+
+# --- verify_claim -----------------------------------------------------------
+
+
+def _verify_set_claim(claim: Claim, env: ConnectFourEnv) -> Optional[bool]:
+    if claim.type is ClaimType.SET_UNSAFE_MOVES:
+        entries = claim.fields.get("entries")
+        if not isinstance(entries, list):
+            return None
+        gt = ground_truth_unsafe_moves(env)
+        # Compare as dict of move -> sorted replies tuple.
+        claim_map = {e["move"]: tuple(sorted(e["opponent_replies"])) for e in entries}
+        gt_map = {e["move"]: tuple(sorted(e["opponent_replies"])) for e in gt}
+        return claim_map == gt_map
+
+    values = claim.fields.get("values")
+    if not isinstance(values, list):
+        return None
+    claimed = set(values)
+    if claim.type is ClaimType.SET_SELF_IMMEDIATE_WIN:
+        gt = set(ground_truth_self_immediate_win_columns(env))
+    elif claim.type is ClaimType.SET_OPPONENT_IMMEDIATE_WIN:
+        gt = set(ground_truth_opponent_immediate_win_columns(env))
+    elif claim.type is ClaimType.SET_SELF_DOUBLE_THREAT_MOVES:
+        gt = set(ground_truth_self_double_threat_moves(env))
+    elif claim.type is ClaimType.SET_SELF_SINGLE_THREAT_MOVES:
+        gt = set(ground_truth_self_single_threat_moves(env))
+    else:
+        return None
+    return claimed == gt
+
+
 def verify_claim(
     claim: Claim,
     env: ConnectFourEnv,
@@ -90,6 +222,9 @@ def verify_claim(
 ) -> Optional[bool]:
     if not claim.has_required_fields():
         return None
+
+    if claim.type in CLAIM_TYPE_TO_TACTICAL_FIELD:
+        return _verify_set_claim(claim, env)
 
     f = claim.fields
     legal = env.legal_moves()

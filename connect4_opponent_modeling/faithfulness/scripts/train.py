@@ -24,7 +24,7 @@ def main() -> int:
     parser.add_argument("--base-model", default="Qwen/Qwen3-4B-Instruct-2507")
     parser.add_argument(
         "--condition",
-        choices=("claims_rationale", "move_only"),
+        choices=("claims_rationale", "move_only", "tactical_claims"),
         default="claims_rationale",
         help="Training output format. Evaluation can still use the full claims prompt.",
     )
@@ -107,6 +107,45 @@ def main() -> int:
             "exceeds this in a step, temperature is bumped by +0.1."
         ),
     )
+    parser.add_argument(
+        "--wandb-project",
+        default="faithfulness",
+        help="Weights & Biases project. Used when WANDB_API_KEY is set.",
+    )
+    parser.add_argument(
+        "--wandb-run-name",
+        default=None,
+        help="Weights & Biases run name. Defaults to log-path basename.",
+    )
+    parser.add_argument(
+        "--no-wandb",
+        action="store_true",
+        help="Disable wandb logging even if WANDB_API_KEY is set.",
+    )
+    parser.add_argument(
+        "--rollout-dump-every",
+        type=int,
+        default=5,
+        help="Write per-rollout records to rollouts.jsonl every N steps. 0 disables.",
+    )
+    parser.add_argument(
+        "--kl-to-base-beta",
+        type=float,
+        default=0.0,
+        help="If > 0, subtract beta * KL(policy || base) from per-rollout reward.",
+    )
+    parser.add_argument(
+        "--diversity-bonus-beta",
+        type=float,
+        default=0.0,
+        help="If > 0, add beta * (1 - within-group share of chosen_move) to reward.",
+    )
+    parser.add_argument(
+        "--rollout-dump-max-per-step",
+        type=int,
+        default=0,
+        help="Cap the number of rollouts dumped per dump step. 0 means unlimited.",
+    )
     args = parser.parse_args()
 
     cfg = TrainerConfig(
@@ -138,6 +177,13 @@ def main() -> int:
         temperature=args.temperature,
         temperature_max=args.temperature_max,
         temperature_diversity_threshold=args.temperature_diversity_threshold,
+        wandb_enabled=not args.no_wandb,
+        wandb_project=args.wandb_project,
+        wandb_run_name=args.wandb_run_name,
+        rollout_dump_every=args.rollout_dump_every,
+        rollout_dump_max_per_step=args.rollout_dump_max_per_step,
+        kl_to_base_beta=args.kl_to_base_beta,
+        diversity_bonus_beta=args.diversity_bonus_beta,
     )
     train(cfg)
     return 0

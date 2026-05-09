@@ -2,15 +2,18 @@
 
 R = -clipped_regret + 0.1 * valid_json + 0.1 * legal_move - 1.0 * illegal_move
 
-Validity gating: legal_move and clipped_regret only matter when valid_json
-is True. An invalid response cannot earn the legal_move bonus through any
-backdoor — without valid JSON we treat the move as missing.
+Validity gating: legal_move and clipped_regret only matter when the response
+is "good enough" — for `claims_rationale` and `move_only` that means JSON
+parses; for `tactical_claims` it additionally means the strict schema is
+satisfied (schema_invalid output is treated as invalid_json, regardless of
+whether chosen_move is legal — otherwise the model can keep exploiting
+answer-leak fields).
 
-Reward range (no truth ablation):
+Reward range (no truth ablation, claims_rationale):
     valid + legal + optimal       :  +0.2
     valid + legal + worst blunder :  +0.2 - clip = -1.8
-    valid + illegal               :  -0.9   (0.1 valid_json - 1.0 illegal)
-    invalid (no chosen_move)      :  -1.0   (illegal penalty applied)
+    valid + illegal               :  -0.9
+    invalid (no chosen_move)      :  -1.0
 
 Optional ablation: + lambda * mean(claim_truth).
 """
@@ -50,14 +53,16 @@ class FaithfulnessRewardCalculator:
         truth_lambda: float = 0.0,
         regret_scale: float = 8.0,
         regret_clip: float = 2.0,
+        condition: str = "claims_rationale",
     ) -> None:
         self.solver = solver
         self.truth_lambda = truth_lambda
         self.regret_scale = regret_scale
         self.regret_clip = regret_clip
+        self.condition = condition
 
     def compute(self, env: ConnectFourEnv, response_text: str) -> RewardBreakdown:
-        parsed = parse_structured_response(response_text)
+        parsed = parse_structured_response(response_text, condition=self.condition)
         return self.compute_from_parsed(env, parsed)
 
     def compute_from_parsed(
@@ -76,6 +81,25 @@ class FaithfulnessRewardCalculator:
                 chosen_move=None,
                 claim_truth_score=None,
                 debug={"reason": "invalid_json"},
+            )
+
+        # Strict-schema gating: for tactical_claims, schema_invalid responses
+        # are treated like invalid JSON for reward purposes. This prevents
+        # the model from earning legal-move bonus while sneaking back the
+        # answer-leak fields the new schema is meant to forbid.
+        if self.condition == "tactical_claims" and not parsed.schema_valid:
+            return RewardBreakdown(
+                reward=-ILLEGAL_MOVE_PENALTY,
+                regret=self.regret_clip,
+                valid_json=False,
+                legal_move=False,
+                illegal_move=True,
+                chosen_move=chosen,
+                claim_truth_score=None,
+                debug={
+                    "reason": "schema_invalid",
+                    "parse_error": parsed.parse_error,
+                },
             )
 
         if chosen is None or chosen not in env.legal_moves():

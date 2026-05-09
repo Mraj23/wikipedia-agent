@@ -49,6 +49,12 @@ from faithfulness.rl.tinker_renderer import (
     RolloutTokens,
     build_datum,
 )
+from faithfulness.rl.wandb_logging import (
+    WandbHandle,
+    init_wandb,
+    log_fast_eval,
+    log_train_step,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +104,13 @@ class TrainerConfig:
     candidate_batch_multiplier: int = 4
     max_group_attempts: int = 4
     min_reward_std: float = 1e-6
+    wandb_enabled: bool = True
+    wandb_project: Optional[str] = "faithfulness"
+    wandb_run_name: Optional[str] = None
+    rollout_dump_every: int = 5
+    rollout_dump_max_per_step: int = 0
+    diversity_bonus_beta: float = 0.0
+    kl_to_base_beta: float = 0.0
 
 
 @dataclass
@@ -164,6 +177,44 @@ def _reward_std(rewards: Sequence[float]) -> float:
     if len(rewards) <= 1:
         return 0.0
     return statistics.pstdev(rewards)
+
+
+def compute_diversity_bonus(
+    group_moves: Sequence[Optional[int]],
+    my_index: int,
+    beta: float,
+) -> float:
+    """Pure helper: bonus for being a minority within the group.
+
+    `share = (count of group_moves == group_moves[my_index]) / |non-None moves|`.
+    If `parsed.chosen_move is None` (illegal/invalid), share is 1.0 — no bonus,
+    no penalty.
+    """
+    if beta == 0.0:
+        return 0.0
+    my_move = group_moves[my_index]
+    if my_move is None:
+        return 0.0
+    present = [m for m in group_moves if m is not None]
+    if not present:
+        return 0.0
+    share = sum(1 for m in present if m == my_move) / len(present)
+    return beta * (1.0 - share)
+
+
+def apply_kl_penalty(
+    reward: float,
+    sum_policy_logprob: float,
+    sum_base_logprob: float,
+    beta: float,
+) -> Tuple[float, float]:
+    """Pure helper: KL ≈ sum_policy_logprob - sum_base_logprob.
+
+    Returns (adjusted_reward, kl).
+    """
+    kl = sum_policy_logprob - sum_base_logprob
+    adjusted = reward - beta * kl
+    return adjusted, kl
 
 
 def group_selection_diagnostics(
@@ -280,6 +331,7 @@ async def _run_fast_eval(
     solver: PonsSolver,
     log_dir: Path,
     step: int,
+    wandb_handle: Optional[WandbHandle] = None,
 ) -> None:
     eval_path = Path(cfg.eval_set_path)
     if not eval_path.exists() or cfg.fast_eval_n_boards <= 0:
@@ -321,7 +373,7 @@ async def _run_fast_eval(
             get_text_content=get_text_content,
             tokens=list(seq.tokens),
         )
-        parsed = parse_structured_response(completion)
+        parsed = parse_structured_response(completion, condition=cfg.condition)
         if parsed.chosen_move is not None and parsed.chosen_move in env.legal_moves():
             move_eval = evaluate_move(env, parsed.chosen_move, solver)
             legal = True
@@ -361,6 +413,8 @@ async def _run_fast_eval(
     }
     with (log_dir / "eval_log.jsonl").open("a") as handle:
         handle.write(json.dumps(entry) + "\n")
+    if wandb_handle is not None:
+        log_fast_eval(wandb_handle, entry)
 
 
 def train(cfg: TrainerConfig) -> None:
@@ -398,6 +452,15 @@ async def _train_async(cfg: TrainerConfig) -> None:
         training_pool_loaded=training_pool_loaded,
     )
 
+    wandb_run_name = cfg.wandb_run_name or log_dir.name
+    wandb_handle = init_wandb(
+        enabled=cfg.wandb_enabled,
+        project=cfg.wandb_project,
+        run_name=wandb_run_name,
+        config={**asdict(cfg), "git_commit": _git_commit()},
+        log_dir=str(log_dir),
+    )
+
     service_kwargs = {}
     if cfg.base_url is not None:
         service_kwargs["base_url"] = cfg.base_url
@@ -417,6 +480,25 @@ async def _train_async(cfg: TrainerConfig) -> None:
     tokenizer = training_client.get_tokenizer()
     renderer = get_renderer(cfg.renderer, tokenizer, model_name=cfg.base_model)
 
+    reference_sampling_client = None
+    if cfg.kl_to_base_beta > 0.0:
+        ref_training_client = await _resolve_tinker_result(
+            create_train(
+                base_model=cfg.base_model,
+                rank=1,
+            )
+        )
+        ref_save_kwargs = {"name": f"{log_dir.name}-kl-ref"}
+        if cfg.final_ttl_seconds is not None:
+            ref_save_kwargs["ttl_seconds"] = cfg.final_ttl_seconds
+        ref_save = await _resolve_tinker_result(
+            ref_training_client.save_weights_for_sampler_async(**ref_save_kwargs)
+        )
+        reference_sampling_client = await _resolve_tinker_result(
+            service_client.create_sampling_client_async(model_path=ref_save.path)
+        )
+        logger.info("KL-to-base reference sampler at %s (beta=%s)", ref_save.path, cfg.kl_to_base_beta)
+
     current_temperature = cfg.temperature
     adam_params = tinker.AdamParams(
         learning_rate=cfg.learning_rate,
@@ -426,9 +508,14 @@ async def _train_async(cfg: TrainerConfig) -> None:
     )
 
     solver = PonsSolver(strict=True)
-    reward_calc = FaithfulnessRewardCalculator(solver=solver, truth_lambda=cfg.truth_lambda)
+    reward_calc = FaithfulnessRewardCalculator(
+        solver=solver,
+        truth_lambda=cfg.truth_lambda,
+        condition=cfg.condition,
+    )
     next_env = _training_position_iterator(cfg, training_records=training_records)
     train_log_path = log_dir / "train_log.jsonl"
+    rollouts_log_path = log_dir / "rollouts.jsonl"
     checkpoint_records = {
         "base_model": cfg.base_model,
         "renderer": cfg.renderer,
@@ -463,6 +550,12 @@ async def _train_async(cfg: TrainerConfig) -> None:
         per_position_metrics = []
         generated_tokens = 0
         sample_text = ""
+        rollouts_dumped_this_step = 0
+        groups_unanimous_optimal = 0
+        groups_unanimous_wrong = 0
+        groups_split = 0
+        groups_modal_optimal = 0
+        groups_modal_wrong = 0
         step_moves: List[int] = []
         claim_type_counts: Counter = Counter()
         skipped_reasons: Counter = Counter()
@@ -475,6 +568,8 @@ async def _train_async(cfg: TrainerConfig) -> None:
         identical_move_groups = 0
         sampled_groups = 0
         unused_sampled_groups = 0
+        step_kl_values: List[float] = []
+        step_diversity_bonuses: List[float] = []
 
         candidate_groups_per_attempt = max(
             cfg.batch_size,
@@ -509,9 +604,16 @@ async def _train_async(cfg: TrainerConfig) -> None:
                     continue
                 candidate_groups += 1
                 sequences = response.sequences
-                group_rewards = []
+                raw_rewards: List[float] = []
+                group_rewards: List[float] = []
                 group_moves: List[Optional[int]] = []
+                group_optimals: List[bool] = []
                 rollouts: List[RolloutTokens] = []
+                seq_gen_ids: List[List[int]] = []
+                seq_completions: List[str] = []
+                seq_parsed: List[Any] = []
+                seq_breakdowns: List[Any] = []
+                seq_sum_policy_logprob: List[float] = []
 
                 for seq in sequences:
                     gen_ids = list(seq.tokens)
@@ -532,14 +634,72 @@ async def _train_async(cfg: TrainerConfig) -> None:
                         completion_text=completion,
                     )
                     breakdown = reward_calc.compute(env, completion)
-                    parsed = parse_structured_response(completion)
+                    parsed = parse_structured_response(completion, condition=cfg.condition)
                     for claim in parsed.claims:
                         claim_type_counts[claim.type.value] += 1
                     group_moves.append(parsed.chosen_move)
                     if parsed.chosen_move is not None:
                         step_moves.append(parsed.chosen_move)
-                    group_rewards.append(breakdown.reward)
+                    raw_rewards.append(breakdown.reward)
+                    group_optimals.append(bool(breakdown.debug.get("is_optimal", False)))
                     rollouts.append(rollout)
+                    seq_gen_ids.append(gen_ids)
+                    seq_completions.append(completion)
+                    seq_parsed.append(parsed)
+                    seq_breakdowns.append(breakdown)
+                    seq_sum_policy_logprob.append(
+                        sum(float(x) for x in logprobs if x is not None)
+                    )
+
+                # KL-to-base. compute_logprobs takes prompt+gen_ids and returns
+                # a list aligned with input positions; the last len(gen_ids)
+                # entries are the per-token base logprobs of the generation.
+                kl_per_rollout = [0.0] * len(sequences)
+                if reference_sampling_client is not None:
+                    ref_inputs = [
+                        prompt.append(tinker.EncodedTextChunk(tokens=list(g)))
+                        for g in seq_gen_ids
+                    ]
+                    ref_futures = [
+                        reference_sampling_client.compute_logprobs_async(mi)
+                        for mi in ref_inputs
+                    ]
+                    ref_results = await asyncio.gather(*ref_futures)
+                    for i, base_lps in enumerate(ref_results):
+                        n_gen = len(seq_gen_ids[i])
+                        if n_gen == 0:
+                            continue
+                        tail = base_lps[-n_gen:] if n_gen <= len(base_lps) else base_lps
+                        sum_base_lp = sum(float(x) for x in tail if x is not None)
+                        _, kl = apply_kl_penalty(
+                            raw_rewards[i],
+                            seq_sum_policy_logprob[i],
+                            sum_base_lp,
+                            cfg.kl_to_base_beta,
+                        )
+                        kl_per_rollout[i] = kl
+
+                # Apply KL + diversity to form shaped rewards.
+                diversity_per_rollout: List[float] = []
+                for i in range(len(sequences)):
+                    reward_after_kl = (
+                        raw_rewards[i] - cfg.kl_to_base_beta * kl_per_rollout[i]
+                    )
+                    div_bonus = compute_diversity_bonus(
+                        group_moves, i, cfg.diversity_bonus_beta
+                    )
+                    diversity_per_rollout.append(div_bonus)
+                    reward_after_all = reward_after_kl + div_bonus
+                    group_rewards.append(reward_after_all)
+
+                step_kl_values.extend(kl_per_rollout)
+                step_diversity_bonuses.extend(diversity_per_rollout)
+
+                # Per-position metrics + rollout dump now that shaped rewards exist.
+                for i, seq in enumerate(sequences):
+                    breakdown = seq_breakdowns[i]
+                    parsed = seq_parsed[i]
+                    completion = seq_completions[i]
                     per_position_metrics.append(
                         {
                             "reward": breakdown.reward,
@@ -551,6 +711,32 @@ async def _train_async(cfg: TrainerConfig) -> None:
                             "rationale_chars": len(parsed.rationale),
                         }
                     )
+                    if cfg.rollout_dump_every > 0 and step % cfg.rollout_dump_every == 0:
+                        if (
+                            cfg.rollout_dump_max_per_step <= 0
+                            or rollouts_dumped_this_step < cfg.rollout_dump_max_per_step
+                        ):
+                            rollout_record = {
+                                "step": step,
+                                "moves": list(getattr(env, "_move_history", []) or []),
+                                "current_player": env.current_player(),
+                                "completion": completion,
+                                "chosen_move": parsed.chosen_move,
+                                "reward": group_rewards[i],
+                                "raw_reward": raw_rewards[i],
+                                "kl_to_base": kl_per_rollout[i],
+                                "diversity_bonus": diversity_per_rollout[i],
+                                "regret": breakdown.regret,
+                                "legal": breakdown.legal_move,
+                                "valid_json": breakdown.valid_json,
+                                "schema_valid": parsed.schema_valid,
+                                "optimal": breakdown.debug.get("is_optimal", False),
+                                "n_claims": len(parsed.claims),
+                                "claim_types": [c.type.value for c in parsed.claims],
+                            }
+                            with rollouts_log_path.open("a") as _rh:
+                                _rh.write(json.dumps(rollout_record) + "\n")
+                            rollouts_dumped_this_step += 1
 
                 diag = group_selection_diagnostics(
                     group_rewards,
@@ -562,6 +748,32 @@ async def _train_async(cfg: TrainerConfig) -> None:
                 group_most_common_pcts.append(diag["most_common_move_pct"])
                 if diag["identical_move_group"]:
                     identical_move_groups += 1
+
+                # Classify the group by (modal-move share) × (modal move optimal?).
+                # "unanimous" = all rollouts in the group agreed on a single move.
+                # "modal_optimal" loosens to majority. Split groups (no clear modal)
+                # contribute zero variance only when their rewards are also tight.
+                present_moves = [m for m in group_moves if m is not None]
+                if present_moves:
+                    counts = Counter(present_moves)
+                    modal_move, modal_count = counts.most_common(1)[0]
+                    modal_share = modal_count / len(present_moves)
+                    modal_is_optimal = any(
+                        opt
+                        for m, opt in zip(group_moves, group_optimals)
+                        if m == modal_move
+                    )
+                    if modal_share >= 1.0:
+                        if modal_is_optimal:
+                            groups_unanimous_optimal += 1
+                        else:
+                            groups_unanimous_wrong += 1
+                    elif modal_share < 0.5:
+                        groups_split += 1
+                    if modal_is_optimal:
+                        groups_modal_optimal += 1
+                    else:
+                        groups_modal_wrong += 1
 
                 if not diag["accepted"]:
                     zero_variance_groups += 1
@@ -702,9 +914,23 @@ async def _train_async(cfg: TrainerConfig) -> None:
             ),
             "skipped_reasons": dict(skipped_reasons),
             "under_target_accepted_groups": under_target,
+            "groups_unanimous_optimal": groups_unanimous_optimal,
+            "groups_unanimous_wrong": groups_unanimous_wrong,
+            "groups_split": groups_split,
+            "groups_modal_optimal": groups_modal_optimal,
+            "groups_modal_wrong": groups_modal_wrong,
             "claim_type_counts": dict(claim_type_counts),
             "unique_moves": unique_moves,
             "most_common_move_pct": most_common_pct,
+            "mean_kl_to_base": (
+                statistics.fmean(step_kl_values) if step_kl_values else 0.0
+            ),
+            "max_kl_to_base": max(step_kl_values) if step_kl_values else 0.0,
+            "mean_diversity_bonus": (
+                statistics.fmean(step_diversity_bonuses) if step_diversity_bonuses else 0.0
+            ),
+            "kl_to_base_beta": cfg.kl_to_base_beta,
+            "diversity_bonus_beta": cfg.diversity_bonus_beta,
             "temperature": logged_temperature,
             "next_temperature": current_temperature,
             "step_time_s": t_elapsed,
@@ -712,6 +938,7 @@ async def _train_async(cfg: TrainerConfig) -> None:
         }
         with train_log_path.open("a") as handle:
             handle.write(json.dumps(log_entry) + "\n")
+        log_train_step(wandb_handle, log_entry)
 
         logger.info(
             (
@@ -746,6 +973,7 @@ async def _train_async(cfg: TrainerConfig) -> None:
                 solver=solver,
                 log_dir=log_dir,
                 step=step,
+                wandb_handle=wandb_handle,
             )
 
         if cfg.save_every > 0 and (step + 1) % cfg.save_every == 0:
@@ -776,3 +1004,4 @@ async def _train_async(cfg: TrainerConfig) -> None:
         json.dumps(checkpoint_records, indent=2)
     )
     logger.info("Final sampler checkpoint: %s", final_sampler.path)
+    wandb_handle.finish()
