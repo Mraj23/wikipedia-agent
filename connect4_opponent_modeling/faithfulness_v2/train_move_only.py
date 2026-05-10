@@ -697,13 +697,11 @@ async def run_rl(args: argparse.Namespace) -> Dict[str, Any]:
                 )
 
             if do_save:
-                state_path = None
-                if not all_zero:
-                    state_path = await _save_training_state(
-                        training_client=training_client,
-                        name=f"{output_dir.name}-step-{step:06d}-state",
-                        ttl_seconds=args.final_ttl_seconds,
-                    )
+                state_path = await _save_training_state(
+                    training_client=training_client,
+                    name=f"{output_dir.name}-step-{step:06d}-state",
+                    ttl_seconds=args.final_ttl_seconds,
+                )
                 with checkpoints_path.open("a") as fh:
                     fh.write(
                         json.dumps(
@@ -821,7 +819,7 @@ def main() -> int:
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--learning-rate", type=float, default=1e-5)
     parser.add_argument("--lora-rank", type=int, default=32)
-    parser.add_argument("--save-every", type=int, default=25)
+    parser.add_argument("--save-every", type=int, default=10)
     parser.add_argument("--rollout-dump-every", type=int, default=5)
     parser.add_argument("--rollout-ttl-seconds", type=int, default=3600)
     parser.add_argument("--final-ttl-seconds", type=int, default=7 * 24 * 3600)
@@ -845,10 +843,11 @@ def main() -> int:
     parser.add_argument(
         "--max-runtime-seconds",
         type=float,
-        default=3000.0,
+        default=1200.0,
         help=(
             "Stop before Tinker JWT/session expiry, save a resumable checkpoint, "
-            "and exit cleanly. Set 0 to disable. Default 3000s (~50min)."
+            "and exit cleanly. Set 0 to disable. Default 1200s (~20min), "
+            "intentionally conservative because individual Tinker futures can stall."
         ),
     )
     parser.add_argument(

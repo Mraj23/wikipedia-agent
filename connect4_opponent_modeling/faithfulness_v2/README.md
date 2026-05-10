@@ -48,6 +48,8 @@ TINKER_API_KEY=... python -m faithfulness_v2.train_move_only \
     --group-size 16 \
     --learning-rate 1e-5 \
     --eval-every 25 \
+    --save-every 10 \
+    --max-runtime-seconds 1200 \
     --output faithfulness_v2/runs/pilot1
 
 # 3b. Resume if the chunk stops before Tinker JWT/session expiry.
@@ -61,6 +63,8 @@ TINKER_API_KEY=... python -m faithfulness_v2.train_move_only \
     --group-size 16 \
     --learning-rate 1e-5 \
     --eval-every 25 \
+    --save-every 10 \
+    --max-runtime-seconds 1200 \
     --output faithfulness_v2/runs/pilot1_resume
 
 # 4. Evaluate the trained checkpoint vs base on the same eval set.
@@ -84,14 +88,14 @@ TINKER_API_KEY=... python -m faithfulness_v2.eval_move_quality \
 
 ## JWT-safe chunking / resume
 
-Tinker JWT/session failures are not a Connect Four failure mode. They happen when a long-running process outlives a short-lived auth token. The trainer avoids that by default with `--max-runtime-seconds 3000`: after roughly 50 minutes, it saves a resumable training-state checkpoint and exits cleanly before the token expires.
+Tinker JWT/session failures are not a Connect Four failure mode. They happen when a long-running process outlives a short-lived auth token. The trainer avoids that by default with `--max-runtime-seconds 1200`: after roughly 20 minutes, it saves a resumable training-state checkpoint and exits cleanly before the token expires. This is intentionally conservative because individual Tinker futures can stall for many minutes.
 
 The important distinction:
 
 - `state_path`: written by Tinker `save_state`; use this with `--resume-state` to continue training with optimizer state.
 - `sampler_path`: written by `save_weights_for_sampler`; use this for eval/inference only.
 
-Every checkpoint record in `checkpoint_paths.jsonl` includes both paths when available. For training continuation, copy the latest `state_path` from the most recent `"reason": "scheduled"`, `"time_limit"`, or `"final"` record and pass it to `--resume-state`. Keep `--start-step` at the next logical step so logs, checkpoint names, and the deterministic pool-choice stream continue correctly.
+Every checkpoint record in `checkpoint_paths.jsonl` includes both paths when available. Scheduled checkpoints save `state_path` even when that step had zero reward variance, so a skipped checkpoint step is still resumable. For training continuation, copy the latest `state_path` from the most recent `"reason": "scheduled"`, `"time_limit"`, or `"final"` record and pass it to `--resume-state`. Keep `--start-step` at the next logical step so logs, checkpoint names, and the deterministic pool-choice stream continue correctly.
 
 ## Code-level guarantees
 
