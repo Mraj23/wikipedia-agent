@@ -246,6 +246,55 @@ def group_selection_diagnostics(
     }
 
 
+def balanced_eval_subset(
+    records: Sequence[Dict],
+    n_boards: int,
+    *,
+    seed: int = 0,
+) -> List[Dict]:
+    """Return a deterministic category-balanced eval subset.
+
+    The locked eval file is written category-by-category. Taking the first N
+    records therefore overweights early strata, so fast evals can look much
+    worse or better than the real held-out set. This helper round-robins across
+    categories after a deterministic within-category shuffle. If records have
+    no `category`, it falls back to a simple deterministic sample.
+    """
+    if n_boards <= 0:
+        return []
+    if n_boards >= len(records):
+        return list(records)
+
+    rng = random.Random(seed)
+    by_category: Dict[str, List[Dict]] = {}
+    for record in records:
+        category = str(record.get("category", "__uncategorized__"))
+        by_category.setdefault(category, []).append(record)
+
+    if len(by_category) <= 1:
+        shuffled = list(records)
+        rng.shuffle(shuffled)
+        return shuffled[:n_boards]
+
+    categories = sorted(by_category)
+    for items in by_category.values():
+        rng.shuffle(items)
+
+    selected: List[Dict] = []
+    while len(selected) < n_boards:
+        progressed = False
+        for category in categories:
+            items = by_category[category]
+            if items:
+                selected.append(items.pop())
+                progressed = True
+                if len(selected) >= n_boards:
+                    break
+        if not progressed:
+            break
+    return selected
+
+
 def _training_position_iterator(
     cfg: TrainerConfig,
     training_records: Optional[List[Dict]] = None,
@@ -352,7 +401,12 @@ async def _run_fast_eval(
         temperature=cfg.temperature,
     )
 
-    records = load_eval_set(str(eval_path))[: cfg.fast_eval_n_boards]
+    all_records = load_eval_set(str(eval_path))
+    records = balanced_eval_subset(
+        all_records,
+        cfg.fast_eval_n_boards,
+        seed=cfg.seed,
+    )
     metrics = []
     truth_total = 0
     truth_true = 0
@@ -409,6 +463,9 @@ async def _run_fast_eval(
         "mean_regret": statistics.fmean(m["regret"] for m in metrics),
         "mean_claim_count": claim_count / len(metrics),
         "claim_truth_rate": truth_true / truth_total if truth_total else None,
+        "category_counts": dict(
+            Counter(item.get("category", "__uncategorized__") for item in records)
+        ),
         "sampler_path": save_result.path,
     }
     with (log_dir / "eval_log.jsonl").open("a") as handle:
@@ -560,6 +617,7 @@ async def _train_async(cfg: TrainerConfig) -> None:
         claim_type_counts: Counter = Counter()
         skipped_reasons: Counter = Counter()
         group_reward_stds: List[float] = []
+        group_shaped_reward_stds: List[float] = []
         group_unique_moves: List[int] = []
         group_most_common_pcts: List[float] = []
         candidate_groups = 0
@@ -738,15 +796,21 @@ async def _train_async(cfg: TrainerConfig) -> None:
                                 _rh.write(json.dumps(rollout_record) + "\n")
                             rollouts_dumped_this_step += 1
 
-                diag = group_selection_diagnostics(
+                raw_diag = group_selection_diagnostics(
+                    raw_rewards,
+                    group_moves,
+                    min_reward_std=cfg.min_reward_std,
+                )
+                shaped_diag = group_selection_diagnostics(
                     group_rewards,
                     group_moves,
                     min_reward_std=cfg.min_reward_std,
                 )
-                group_reward_stds.append(diag["reward_std"])
-                group_unique_moves.append(diag["unique_moves"])
-                group_most_common_pcts.append(diag["most_common_move_pct"])
-                if diag["identical_move_group"]:
+                group_reward_stds.append(raw_diag["reward_std"])
+                group_shaped_reward_stds.append(shaped_diag["reward_std"])
+                group_unique_moves.append(raw_diag["unique_moves"])
+                group_most_common_pcts.append(raw_diag["most_common_move_pct"])
+                if raw_diag["identical_move_group"]:
                     identical_move_groups += 1
 
                 # Classify the group by (modal-move share) × (modal move optimal?).
@@ -775,9 +839,9 @@ async def _train_async(cfg: TrainerConfig) -> None:
                     else:
                         groups_modal_wrong += 1
 
-                if not diag["accepted"]:
+                if not raw_diag["accepted"]:
                     zero_variance_groups += 1
-                    skipped_reasons[diag["skip_reason"]] += 1
+                    skipped_reasons[raw_diag["skip_reason"]] += 1
                     all_rewards.extend(group_rewards)
                     continue
 
@@ -906,6 +970,14 @@ async def _train_async(cfg: TrainerConfig) -> None:
             "mean_group_reward_std": (
                 statistics.fmean(group_reward_stds) if group_reward_stds else 0.0
             ),
+            "mean_group_raw_reward_std": (
+                statistics.fmean(group_reward_stds) if group_reward_stds else 0.0
+            ),
+            "mean_group_shaped_reward_std": (
+                statistics.fmean(group_shaped_reward_stds)
+                if group_shaped_reward_stds
+                else 0.0
+            ),
             "mean_group_unique_moves": (
                 statistics.fmean(group_unique_moves) if group_unique_moves else 0.0
             ),
@@ -931,6 +1003,7 @@ async def _train_async(cfg: TrainerConfig) -> None:
             ),
             "kl_to_base_beta": cfg.kl_to_base_beta,
             "diversity_bonus_beta": cfg.diversity_bonus_beta,
+            "group_acceptance_basis": "raw_reward_std",
             "temperature": logged_temperature,
             "next_temperature": current_temperature,
             "step_time_s": t_elapsed,

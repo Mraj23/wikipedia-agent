@@ -50,4 +50,6 @@ experiments/opponent_next_move/base_scaffold_reasoning_report.html
 faithfulness/data/*.jsonl
 faithfulness/data/runs*/
 faithfulness/results*/
+faithfulness_v2/data/
+faithfulness_v2/runs/
 *.bak
