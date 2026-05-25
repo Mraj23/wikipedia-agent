@@ -12,11 +12,18 @@ Concise CoT and Chain-of-Draft on non-math reasoning tasks?
 ## Scope (first pass)
 
 - **Benchmarks:** BBH Tracking Shuffled Objects, BBH Logical Deduction (n=250 each)
-- **Model:** Qwen/Qwen2.5-7B-Instruct (temperature=0, max_new_tokens=512)
+- **Inference:** Tinker (`tinker.ServiceClient` + `tinker_cookbook.renderers`),
+  rank-1 LoRA training client used as a base-model sampler (same pattern as
+  `connect4_opponent_modeling/faithfulness_v2/generate_pool.py`)
+- **Model:** `Qwen/Qwen3-8B` with `qwen3_instruct` renderer (temperature=0,
+  max_new_tokens=512). Swap via `--model` / `--renderer` or the `MODEL` /
+  `RENDERER` env vars in the run scripts.
 - **Conditions:** `answer_only`, `normal_cot`, `concise_cot`, `chain_of_draft`,
   `caveman_full`, plus matched-budget variants of `concise_cot` and
   `chain_of_draft` using the per-task mean reasoning-token count of
   `caveman_full`.
+
+Set `TINKER_API_KEY` before running the scripts.
 
 ## Layout
 

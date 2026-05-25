@@ -1,0 +1,55 @@
+# Human-readable mirror of src/prompts.py. src/prompts.py is the source of truth
+# that run_inference.py imports from. Edit there, then sync here.
+
+answer_only: |
+  Solve the task. Return only the final answer.
+  Question:
+  {question}
+  Answer:
+
+normal_cot: |
+  Solve the task. Think step by step, then give the final answer.
+  Question:
+  {question}
+  Return exactly:
+  Reasoning: ...
+  Answer: ...
+
+concise_cot: |
+  Solve the task. Use concise reasoning. Avoid unnecessary explanation.
+  Question:
+  {question}
+  Return exactly:
+  Reasoning: ...
+  Answer: ...
+
+chain_of_draft: |
+  Solve the task using minimal draft notes.
+  Each reasoning step should be very short, around 5 words or fewer.
+  Do not write full explanatory sentences unless necessary.
+  Question:
+  {question}
+  Return exactly:
+  Reasoning: ...
+  Answer: ...
+
+caveman_full: |
+  Solve task using caveman reasoning.
+  Rules:
+  - No filler.
+  - No articles unless needed.
+  - Use fragments.
+  - Use arrows for transitions.
+  - Keep exact names, objects, constraints.
+  - Show only necessary dependency chain.
+  Question:
+  {question}
+  Return exactly:
+  Reasoning: ...
+  Answer: ...
+
+budget_line: "Use at most {budget} reasoning tokens."
+
+matched_budget_conditions:
+  concise_cot_matched_budget: concise_cot
+  chain_of_draft_matched_budget: chain_of_draft

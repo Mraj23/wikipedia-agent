@@ -1,8 +1,7 @@
 datasets
 transformers
-torch
-accelerate
-vllm
+tinker
+tinker_cookbook
 pyyaml
 pandas
 numpy
