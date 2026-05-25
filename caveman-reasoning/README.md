@@ -32,10 +32,27 @@ caveman-reasoning/
   configs/         # experiment.yaml, prompts.yaml
   data/            # raw/, processed/{task}.jsonl
   src/             # load_bbh, prompts, run_inference, parse_outputs,
-                   # grade, token_count, analyze, plot
-  outputs/         # raw_generations/, parsed/, metrics/, plots/
+                   # grade, token_count, analyze, plot,
+                   # error_analysis, write_report
+  outputs/         # raw_generations/, parsed/, metrics/, plots/,
+                   # error_analysis/, RESULTS.md
   scripts/         # run_first_pass.sh, run_matched_budget.sh
 ```
+
+## How to run
+
+```
+pip install -r requirements.txt
+export TINKER_API_KEY=...
+./scripts/run_first_pass.sh         # 5 base conditions
+./scripts/run_matched_budget.sh     # adds the two matched-budget controls
+                                    # and writes outputs/RESULTS.md
+```
+
+`run_matched_budget.sh` computes the per-task budget from `caveman_full`'s
+mean reasoning tokens, reruns the two control conditions under that budget,
+re-aggregates metrics, samples errors via `src/error_analysis.py`, and writes
+the final report via `src/write_report.py`.
 
 ## Pass criteria
 

@@ -71,3 +71,14 @@ python src/analyze.py \
 python src/plot.py \
   --input outputs/metrics/summary.csv \
   --output outputs/plots/pareto.png
+
+python src/error_analysis.py \
+  --input outputs/metrics/tokenized.jsonl \
+  --output-dir outputs/error_analysis
+
+python src/write_report.py \
+  --input outputs/metrics/summary.csv \
+  --output outputs/RESULTS.md \
+  --budgets outputs/metrics/budgets.json \
+  --pareto-plot plots/pareto.png \
+  --error-analysis-dir error_analysis
