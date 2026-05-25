@@ -7,20 +7,24 @@ from pathlib import Path
 
 
 REASONING_RE = re.compile(
-    r"reasoning\s*:\s*(.*?)(?=answer\s*:|$)", re.IGNORECASE | re.DOTALL
+    r"^\s*reasoning\s*:\s*(.*?)(?=^\s*answer\s*:|\Z)",
+    re.IGNORECASE | re.DOTALL | re.MULTILINE,
 )
-ANSWER_RE = re.compile(r"answer\s*:\s*(.*)$", re.IGNORECASE | re.DOTALL)
+ANSWER_LINE_RE = re.compile(
+    r"^\s*answer\s*:\s*(.+?)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 
 def parse_one(condition: str, raw: str):
     if condition == "answer_only":
         return "", raw.strip(), True
 
-    answer_match = ANSWER_RE.search(raw)
-    if answer_match:
+    answer_matches = ANSWER_LINE_RE.findall(raw)
+    if answer_matches:
+        answer = answer_matches[-1].strip()
         reasoning_match = REASONING_RE.search(raw)
         reasoning = reasoning_match.group(1).strip() if reasoning_match else ""
-        answer = answer_match.group(1).strip()
         return reasoning, answer, True
 
     lines = [l for l in raw.strip().splitlines() if l.strip()]

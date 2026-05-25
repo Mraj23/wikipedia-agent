@@ -30,8 +30,13 @@ def heuristic_label(row, cell_mean_reasoning_tokens: float) -> str:
     if not parse_ok or not ans:
         return "answer formatting issue"
 
-    if gold and gold.lower() in reasoning.lower() and ans != gold:
-        return "correct reasoning but wrong final answer"
+    if parse_ok and ans and gold:
+        gold_upper = gold.upper()
+        reasoning_upper = reasoning.upper()
+        if (
+            f"({gold_upper})" in reasoning_upper or f" {gold_upper})" in reasoning_upper
+        ) and ans != gold:
+            return "correct reasoning but wrong final answer"
 
     if (
         cell_mean_reasoning_tokens

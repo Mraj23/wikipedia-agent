@@ -54,3 +54,14 @@ python src/analyze.py \
 python src/plot.py \
   --input outputs/metrics/summary.csv \
   --output outputs/plots/pareto.png
+
+python src/error_analysis.py \
+  --input outputs/metrics/tokenized.jsonl \
+  --output-dir outputs/error_analysis \
+  --conditions normal_cot chain_of_draft caveman_full
+
+python src/write_report.py \
+  --input outputs/metrics/summary.csv \
+  --output outputs/RESULTS.md \
+  --pareto-plot plots/pareto.png \
+  --error-analysis-dir error_analysis
