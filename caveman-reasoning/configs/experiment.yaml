@@ -1,0 +1,22 @@
+model: Qwen/Qwen3-8B
+renderer: qwen3_instruct
+model_tag: qwen3_8b
+tasks:
+  - tracking_shuffled_objects
+  - logical_deduction
+conditions:
+  - answer_only
+  - normal_cot
+  - concise_cot
+  - chain_of_draft
+  - caveman_full
+matched_budget_conditions:
+  - concise_cot_matched_budget
+  - chain_of_draft_matched_budget
+n_examples: 250
+seed: 0
+temperature: 0.0
+top_p: 1.0
+max_new_tokens: 512
+concurrency: 16
+lora_rank: 1

@@ -1,0 +1,23 @@
+# Reproducible from src/load_bbh.py
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*.jsonl
+
+# Bulky inference artifacts; rebuildable from inputs
+outputs/raw_generations/**
+!outputs/raw_generations/.gitkeep
+outputs/parsed/**
+!outputs/parsed/.gitkeep
+
+# Large intermediates; summary.csv / summary_by_task.csv / RESULTS.md / plots
+# and error_analysis samples are small and may be committed.
+outputs/metrics/graded.jsonl
+outputs/metrics/tokenized.jsonl
+outputs/metrics/errors.jsonl
+
+# Python
+__pycache__/
+*.pyc
+.python-version
+.venv/
+venv/
