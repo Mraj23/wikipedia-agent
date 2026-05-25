@@ -1,0 +1,33 @@
+# Reproducible from src/load_bbh.py
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*.jsonl
+
+# Bulky generation artifacts; rebuildable from inputs
+data/rollouts/*.jsonl
+data/feedback/*.jsonl
+data/revised/*.jsonl
+data/train/*.jsonl
+
+outputs/rollouts/**
+!outputs/rollouts/.gitkeep
+outputs/feedback/**
+!outputs/feedback/.gitkeep
+outputs/revised/**
+!outputs/revised/.gitkeep
+outputs/evals/**
+!outputs/evals/.gitkeep
+
+# Checkpoint manifests are tiny; keep them. Root .gitignore has a global
+# `checkpoints/` rule, so re-include this subtree explicitly. Plot/eval
+# summaries are small; keep.
+!outputs/checkpoints/
+!outputs/checkpoints/**/
+!outputs/checkpoints/**/manifest.json
+!outputs/checkpoints/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/

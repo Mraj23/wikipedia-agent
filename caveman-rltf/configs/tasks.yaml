@@ -1,0 +1,7 @@
+dataset: lukaemon/bbh
+tasks:
+  tracking_shuffled_objects: tracking_shuffled_objects_seven_objects
+  logical_deduction: logical_deduction_seven_objects
+train_n: 1000
+eval_n: 250
+seed: 0

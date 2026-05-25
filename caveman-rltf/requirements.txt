@@ -1,0 +1,10 @@
+datasets
+transformers
+tinker
+tinker_cookbook
+anthropic
+pyyaml
+pandas
+numpy
+matplotlib
+tqdm
