@@ -16,8 +16,6 @@ import asyncio
 import json
 from pathlib import Path
 
-from transformers import AutoTokenizer
-
 from grade import grade_one
 from prompts import build_prompt
 from _tinker import (
@@ -53,7 +51,12 @@ async def amain(args):
     )
 
     sem = asyncio.Semaphore(args.concurrency)
-    tok = AutoTokenizer.from_pretrained(args.model)
+    # Use the Tinker tokenizer (works for Tinker-hosted ids that may not be on
+    # the HF Hub) for counting think/answer sub-spans.
+    tok = tokenizer
+
+    def n_tok(text):
+        return len(tok.encode(text or "", add_special_tokens=False))
 
     done = 0
     total = len(rows)
@@ -62,31 +65,29 @@ async def amain(args):
         nonlocal done
         prompt = build_prompt(args.prompt_condition, row["question"])
         async with sem:
-            texts = await sample_many(
+            samples = await sample_many(
                 sc, renderer, tokenizer, prompt, sp, n_samples=1
             )
         done += 1
         if done % 25 == 0 or done == total:
             print(f"  {done}/{total}")
-        return row, prompt, texts[0]
+        return row, prompt, samples[0]
 
     results = await asyncio.gather(*(run_one(r) for r in rows))
 
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w") as f:
-        for row, prompt, text in results:
+        for row, prompt, s in results:
+            text = s["text"]
             g = grade_one(text, row["gold"], row.get("task"))
-            reasoning_tokens = len(
-                tok.encode(g["reasoning_text"], add_special_tokens=False)
-            )
-            answer_tokens = len(
-                tok.encode(g["answer_text"], add_special_tokens=False)
-            )
-            # total_output_tokens is parser-independent and is the PRIMARY
-            # length axis (the quantity Caveman actually targets). reasoning
-            # tokens are secondary and only reliable when parse_success.
-            total_tokens = len(tok.encode(text, add_special_tokens=False))
+            # Separate "brain" (thinking) from "mouth" (post-</think> output).
+            # thinking_tokens is the PRIMARY compression target for a thinking
+            # model; answer/output tokens are reported alongside it.
+            thinking_tokens = n_tok(g["thinking_text"])
+            output_tokens = n_tok(g["post_think_text"])  # visible answer region
+            answer_tokens = n_tok(g["answer_text"])
+            total_tokens = s["n_tokens"]  # exact generated token count
             obj = {
                 "id": row["id"],
                 "task": row["task"],
@@ -98,7 +99,8 @@ async def amain(args):
                 "raw_output": text,
                 "model": args.model,
                 "sampler": sampler_label,
-                "reasoning_tokens": reasoning_tokens,
+                "thinking_tokens": thinking_tokens,
+                "output_tokens": output_tokens,
                 "answer_tokens": answer_tokens,
                 "total_output_tokens": total_tokens,
                 **g,
@@ -109,8 +111,8 @@ async def amain(args):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="Qwen/Qwen2.5-7B-Instruct")
-    parser.add_argument("--renderer", default="qwen2_5_instruct")
+    parser.add_argument("--model", default="Qwen/Qwen3.6-35B-A3B")
+    parser.add_argument("--renderer", default="qwen3")
     parser.add_argument(
         "--sampler-path",
         default=None,
@@ -133,7 +135,7 @@ def main():
     )
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--top-p", type=float, default=1.0)
-    parser.add_argument("--max-new-tokens", type=int, default=256)
+    parser.add_argument("--max-new-tokens", type=int, default=2048)
     parser.add_argument("--concurrency", type=int, default=16)
     parser.add_argument("--max-rows", type=int, default=None)
     args = parser.parse_args()

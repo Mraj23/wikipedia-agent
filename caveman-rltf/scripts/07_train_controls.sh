@@ -6,8 +6,8 @@ cd "$(dirname "$0")/.."
 # y1_graded. Each trained checkpoint can then be added to RUN_NAMES in 06.
 [[ -z "${TINKER_API_KEY:-}" ]] && { echo "TINKER_API_KEY not set" >&2; exit 1; }
 
-MODEL=${MODEL:-Qwen/Qwen2.5-7B-Instruct}
-RENDERER=${RENDERER:-qwen2_5_instruct}
+MODEL=${MODEL:-Qwen/Qwen3.6-35B-A3B}
+RENDERER=${RENDERER:-qwen3}
 
 # --- sft_caveman: model's own shortest correct first attempt ---
 python src/build_sft_dataset.py --mode sft_caveman \
@@ -23,7 +23,7 @@ TRAIN_FILE=data/train/sft_y1.jsonl RUN_NAME=sft_y1 scripts/05_train_rltf_sft.sh
 
 # --- grpo_length: RL control that directly rewards shortness-if-correct ---
 ALPHA=${ALPHA:-0.1}
-TOKEN_BUDGET=${TOKEN_BUDGET:-64}
+TOKEN_BUDGET=${TOKEN_BUDGET:-256}
 python src/train_grpo_length.py \
   --model "$MODEL" --renderer "$RENDERER" \
   --train data/processed/train.jsonl \

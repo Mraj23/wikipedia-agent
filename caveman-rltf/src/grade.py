@@ -1,20 +1,21 @@
-"""Parse + grade model outputs.
+"""Parse + grade model outputs from a thinking model (Qwen3.x hybrid).
 
-Handles two answer types, auto-detected from the gold string:
+Output shape (the prompt already opened "<think>"):
+    <thinking ...>\n</think>\n\n<answer region, ending in "Answer: X">
+
+We split on "</think>" into:
+    thinking_text   -- the reasoning "brain" tokens (primary compression target)
+    post_think_text -- everything after </think> (the visible "mouth")
+and extract the final answer from post_think_text.
+
+Answer type is auto-detected from the gold string:
   - multiple-choice letter (BBH): gold looks like "(C)" or a bare "C"
   - numeric (GSM8K):              gold is a number, e.g. "18"
 
-Robustness notes (these matter because the whole experiment measures terse
-"caveman" outputs, which are exactly the outputs a naive grader mishandles):
-  - The reasoning/answer split is reported via `parse_success`. When the
-    model drops the "Answer:" label we fall back conservatively and flag it,
-    so downstream analysis can exclude unparsed rows from the *reasoning*-token
-    metric. The primary length axis is `total_output_tokens` (see eval.py),
-    which never depends on parsing and is the quantity Caveman actually
-    targets ("make mouth smaller").
-  - Letter extraction prefers explicit "(X)" / "answer is X" cues and only
-    falls back to a bare standalone letter as a last resort, and never to a
-    lowercase article like "a" unless nothing else is present.
+Robustness: letter extraction prefers explicit "(X)" / "answer is X" cues and
+only falls back to a bare standalone letter as a last resort (uppercase first),
+so terse outputs are not mis-graded by grabbing a stray lowercase article.
+`parse_success` is True only when an explicit "Answer:" line is found.
 """
 
 from __future__ import annotations
@@ -25,10 +26,6 @@ import re
 from pathlib import Path
 
 
-REASONING_RE = re.compile(
-    r"^\s*reasoning\s*:\s*(.*?)(?=^\s*answer\s*:|\Z)",
-    re.IGNORECASE | re.DOTALL | re.MULTILINE,
-)
 ANSWER_LINE_RE = re.compile(
     r"^\s*(?:final\s+)?answer\s*:\s*(.+?)\s*$",
     re.IGNORECASE | re.MULTILINE,
@@ -47,39 +44,32 @@ NUMBER_RE = re.compile(r"-?\$?\d[\d,]*(?:\.\d+)?")
 GOLD_LETTER_RE = re.compile(r"^\s*\(?([a-zA-Z])\)?\s*$")
 
 
-def parse_output(raw: str):
-    """Return (reasoning_text, answer_text, parse_success).
-
-    parse_success is True only when an explicit "Answer:" (or "Final
-    answer:") line is found; callers should treat reasoning-token counts
-    from unparsed rows as unreliable.
-    """
+def split_thinking(raw: str):
+    """Return (thinking_text, post_think_text)."""
     raw = raw or ""
-    answer_matches = ANSWER_LINE_RE.findall(raw)
-    if answer_matches:
-        answer = answer_matches[-1].strip()
-        reasoning_match = REASONING_RE.search(raw)
-        if reasoning_match:
-            reasoning = reasoning_match.group(1).strip()
-        else:
-            # Everything before the (last) answer line is reasoning.
-            idx = raw.lower().rfind("answer:")
-            reasoning = raw[:idx].strip() if idx > 0 else ""
-            reasoning = re.sub(r"^\s*reasoning\s*:\s*", "", reasoning, flags=re.IGNORECASE)
-        return reasoning, answer, True
+    if "</think>" in raw:
+        thinking, rest = raw.split("</think>", 1)
+        thinking = re.sub(r"^\s*<think>\s*", "", thinking, flags=re.IGNORECASE)
+        return thinking.strip(), rest.strip()
+    # No think block (e.g. thinking disabled) — treat all as post-think.
+    return "", raw.strip()
 
-    lines = [l for l in raw.strip().splitlines() if l.strip()]
+
+def extract_answer_text(post_think: str):
+    """Return (answer_text, parse_success) from the post-</think> region."""
+    matches = ANSWER_LINE_RE.findall(post_think)
+    if matches:
+        return matches[-1].strip(), True
+    lines = [l for l in post_think.strip().splitlines() if l.strip()]
     if not lines:
-        return "", "", False
-    return "\n".join(lines[:-1]).strip(), lines[-1].strip(), False
+        return "", False
+    return lines[-1].strip(), False
 
 
 def extract_choice(text: str) -> str:
-    """Normalize a multiple-choice answer to a single uppercase letter ("" if none)."""
     if not text:
         return ""
     text = text.strip()
-
     m = ANSWER_IS_LETTER_RE.search(text)
     if m:
         return m.group(1).upper()
@@ -89,8 +79,6 @@ def extract_choice(text: str) -> str:
     m = LEADING_LETTER_RE.match(text)
     if m:
         return m.group(1).upper()
-    # Prefer a standalone UPPERCASE letter (options are uppercase) before
-    # risking a lowercase article like "a".
     upper = UPPER_LETTER_RE.findall(text)
     if upper:
         return upper[-1].upper()
@@ -101,7 +89,6 @@ def extract_choice(text: str) -> str:
 
 
 def extract_number(text: str) -> str:
-    """Return the last number in `text` as a normalized string ("" if none)."""
     if not text:
         return ""
     matches = NUMBER_RE.findall(text)
@@ -120,18 +107,21 @@ def _is_letter_gold(gold: str) -> bool:
 
 
 def grade_one(raw_output: str, gold: str, task: str | None = None):
-    reasoning, answer, parse_ok = parse_output(raw_output)
+    thinking_text, post_think_text = split_thinking(raw_output)
+    answer_text, parse_ok = extract_answer_text(post_think_text)
     letter_mode = _is_letter_gold(gold)
     if letter_mode:
         gold_norm = extract_choice(gold)
-        ans_norm = extract_choice(answer)
+        ans_norm = extract_choice(answer_text)
     else:
         gold_norm = extract_number(gold)
-        ans_norm = extract_number(answer)
+        ans_norm = extract_number(answer_text)
     return {
-        "reasoning_text": reasoning,
-        "answer_text": answer,
+        "thinking_text": thinking_text,
+        "post_think_text": post_think_text,
+        "answer_text": answer_text,
         "parse_success": parse_ok,
+        "has_thinking": bool(thinking_text),
         "answer_type": "letter" if letter_mode else "numeric",
         "normalized_gold": gold_norm,
         "normalized_answer": ans_norm,

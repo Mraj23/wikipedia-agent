@@ -21,19 +21,19 @@ Arrows `X → Y` are an `ultra`-level device, not the default.
 > — `upstream-caveman/README.md:163-164`
 
 **What we do (and the divergence).** We borrow the *style* and apply it to the
-visible **reasoning trace** — exactly the place Caveman leaves alone. This is a
+hidden **thinking trace** — exactly the place Caveman leaves alone. This is a
 deliberate research extension, not a reproduction. Consequences we keep visible:
 
 - Our caveman prompt (`src/prompts.py`) mirrors the canonical rules (drop
   articles/filler/pleasantries/hedging; keep names/numbers/constraints exact;
-  fragments OK) and *adds* reasoning-specific guidance ("show only the
-  necessary dependency chain"; arrows allowed). It is faithful to the style,
-  extended in scope.
-- Qwen2.5-7B-Instruct has **no separate thinking channel**, so our "reasoning
-  tokens" are just visible prose. To avoid the brain/mouth conflation, the
-  **primary metric is total output tokens**. A true test of Caveman's
-  "mouth-only" claim would need a thinking model (e.g. Qwen3 in thinking mode);
-  noted as future work.
+  fragments OK) and *adds* reasoning-specific guidance ("only the necessary
+  dependency chain"; arrows allowed). Faithful to the style, extended in scope.
+- We use **thinking models** (`Qwen/Qwen3.6-35B-A3B`, `Qwen/Qwen3.5-9B`, renderer
+  `qwen3`, native `<think>...</think>`), precisely so the brain/mouth split is
+  real. We measure **thinking tokens** (brain) and **answer tokens** (mouth)
+  separately; the compression target and primary Pareto axis is thinking
+  tokens. This directly tests whether feedback can shrink the brain — the thing
+  Caveman explicitly does not attempt.
 
 ## 2. RLTF (`upstream-rltf`)
 

@@ -4,11 +4,11 @@ cd "$(dirname "$0")/.."
 
 [[ -z "${TINKER_API_KEY:-}" ]] && { echo "TINKER_API_KEY not set" >&2; exit 1; }
 
-MODEL=${MODEL:-Qwen/Qwen2.5-7B-Instruct}
-RENDERER=${RENDERER:-qwen2_5_instruct}
+MODEL=${MODEL:-Qwen/Qwen3.6-35B-A3B}
+RENDERER=${RENDERER:-qwen3}
 TEMPERATURE=${TEMPERATURE:-0.7}
 N_SAMPLES=${N_SAMPLES:-4}
-MAX_NEW_TOKENS=${MAX_NEW_TOKENS:-256}
+MAX_NEW_TOKENS=${MAX_NEW_TOKENS:-2048}
 CONCURRENCY=${CONCURRENCY:-16}
 
 python src/generate_y0.py \

@@ -65,6 +65,26 @@ async def build_sampling_client_from_path(
     return sampling_client, renderer, tokenizer
 
 
+_CONTROL_TOKENS = ("<|im_end|>", "<|endoftext|>", "<|im_start|>")
+
+
+def clean_generation(tokenizer, tokens) -> str:
+    """Decode generated tokens to text, KEEPING <think>/</think> markers but
+    dropping chat control tokens. We decode with special tokens visible (so the
+    </think> boundary survives) then trim at the end-of-message marker.
+
+    For thinking models the prompt already opened "<think>\\n", so the
+    generated text looks like:  <thinking>...\\n</think>\\n\\n<answer>
+    """
+    text = tokenizer.decode(list(tokens), skip_special_tokens=False)
+    for ctrl in ("<|im_end|>", "<|endoftext|>"):
+        if ctrl in text:
+            text = text.split(ctrl)[0]
+    # Drop any stray role headers that leaked in.
+    text = text.replace("<|im_start|>assistant", "").replace("<|im_start|>", "")
+    return text.strip()
+
+
 async def sample_many(
     sampling_client,
     renderer,
@@ -74,9 +94,12 @@ async def sample_many(
     n_samples: int = 1,
     system_msg: str | None = None,
 ):
-    """Sample `n_samples` completions for a single user message."""
-    from tinker_cookbook.renderers import get_text_content
+    """Sample `n_samples` completions for a single user message.
 
+    Returns a list of dicts: {"text": <full output incl think block>,
+    "n_tokens": <generated token count>}. Token count is exact (len of the
+    sampled tokens), avoiding any dependency on re-tokenizing parsed text.
+    """
     messages = []
     if system_msg:
         messages.append({"role": "system", "content": system_msg})
@@ -89,15 +112,7 @@ async def sample_many(
             sampling_params=sampling_params,
         )
     )
-    out = []
-    for seq in result.sequences:
-        tokens = list(seq.tokens)
-        try:
-            msg, ok = renderer.parse_response(tokens)
-            if ok:
-                out.append(str(get_text_content(msg)))
-                continue
-        except Exception:
-            pass
-        out.append(tokenizer.decode(tokens, skip_special_tokens=True))
-    return out
+    return [
+        {"text": clean_generation(tokenizer, seq.tokens), "n_tokens": len(seq.tokens)}
+        for seq in result.sequences
+    ]

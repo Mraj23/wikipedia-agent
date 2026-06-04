@@ -1,94 +1,37 @@
-# Human-readable mirror of src/prompts.py. src/prompts.py is the source of
-# truth that the generators import. Edit there, then sync here.
+# Human-readable mirror of src/prompts.py (the source of truth). For a
+# thinking model: reasoning happens natively in <think>...</think>; we only
+# require the response to end with "Answer: <x>". Compression conditions push
+# on the THINKING. Edit src/prompts.py, then sync here.
 
-# --- Eval prompt conditions (inference-time comparison arms) ---
+answer_tail: 'End your response with a line exactly: "Answer: <answer>".'
 
+# --- Eval prompt conditions ---
 plain: |
-  Solve the task. Think step by step, then give the final answer.
-  Question:
-  {question}
-  Return exactly:
-  Reasoning: ...
-  Answer: ...
-
+  Solve the task. Think it through, then give the final answer. {answer_tail}
 concise: |
-  Solve the task. Use brief reasoning. Avoid unnecessary words.
-  Question:
-  {question}
-  Return exactly:
-  Reasoning: ...
-  Answer: ...
-
+  Solve the task. Keep your thinking brief — avoid unnecessary words. {answer_tail}
 chain_of_draft: |
-  Solve the task using concise draft reasoning.
-  Keep only the key intermediate steps; each step a few words at most.
-  Question:
-  {question}
-  Return exactly:
-  Reasoning: ...
-  Answer: ...
-
+  Solve the task. Think in minimal draft steps — each step a few words. {answer_tail}
 caveman: |
-  Solve task. Respond terse like smart caveman. All logic stay. Only fluff die.
-  Rules:
-  - Drop articles, filler, pleasantries, hedging.
-  - Fragments OK. Short words.
-  - Names, objects, constraints, numbers: exact.
-  - Show only necessary dependency chain. Arrows OK (X -> Y).
-  - No restating problem. No "let me" / "let's".
-  Question:
-  {question}
-  Return exactly:
-  Reasoning: ...
-  Answer: ...
+  Solve task. Think caveman style. All logic stay. Only fluff die.
+  Thinking rules: drop articles/filler/pleasantries/hedging; fragments OK;
+  short words; names/objects/constraints/numbers exact; only necessary
+  dependency chain; arrows OK (X -> Y); no restating; no "let me"/"let's".
+  {answer_tail}
 
-# --- Judge critique (feedback modes) ---
-
+# --- Judge feedback modes ---
 judge_system_caveman: |
-  You are a strict reasoning-compression critic.
-  Given a question, gold answer, and model answer, provide feedback that helps
-  the model revise into a shorter, correct caveman-style reasoning trace.
-  Do not write the revised solution.
-  Do not solve the task from scratch unless needed to explain the error.
-  Focus on: correctness; necessary state transitions/constraints; redundant
-  reasoning; missing or unsafe cuts; caveman-style compression.
-  Return exactly: Verdict / Correctness / Keep / Cut / Merge / Unsafe Cuts /
-  Revision Instruction.
-
+  Strict reasoning-compression critic. Help the model re-THINK in far fewer
+  tokens, caveman-style, staying correct. Don't write the revision. Returns
+  Verdict / Correctness / Keep / Cut / Merge / Unsafe Cuts / Revision Instruction.
 judge_system_generic: |
-  You are a reasoning-compression critic.
-  Same correctness discipline, no caveman styling — used for the "does the
-  caveman FEEDBACK content matter?" ablation.
-  Return exactly: Verdict / Correctness / Keep / Cut / Revision Instruction.
-
-judge_user: |
-  Question:
-  {question}
-
-  Gold answer:
-  {gold}
-
-  Model first answer:
-  {y0}
+  Reasoning-compression critic, no caveman styling — the feedback-content
+  ablation. Returns Verdict / Correctness / Keep / Cut / Revision Instruction.
 
 # --- Revision prompts ---
-
 x1_with_feedback: |
-  Original Question:
-  {question}
-  Your first answer:
-  {y0}
-  Feedback:
-  {c0}
-  Revise your answer using the feedback.
-  Rules: caveman reasoning; preserve necessary transitions/constraints; remove
-  filler; arrows where useful; return only Reasoning and Answer.
-
+  Question + first attempt + feedback. Re-solve using feedback; think caveman
+  style in far fewer thinking tokens; preserve transitions/constraints. {answer_tail}
 x1_no_feedback: |
-  Original Question:
-  {question}
-  Your first answer:
-  {y0}
-  Revise your answer to be much shorter while keeping it correct.
-  Rules: caveman reasoning; preserve necessary transitions/constraints; remove
-  filler; return only Reasoning and Answer.
+  Question + first attempt. Re-solve with much shorter thinking, still correct;
+  caveman style; preserve transitions/constraints. {answer_tail}

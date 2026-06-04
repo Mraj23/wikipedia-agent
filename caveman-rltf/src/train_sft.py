@@ -161,15 +161,15 @@ async def amain(args):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="Qwen/Qwen2.5-7B-Instruct")
-    parser.add_argument("--renderer", default="qwen2_5_instruct")
+    parser.add_argument("--model", default="Qwen/Qwen3.6-35B-A3B")
+    parser.add_argument("--renderer", default="qwen3")
     parser.add_argument("--train", required=True)
     parser.add_argument(
         "--output",
         required=True,
         help="dir for manifest.json with the tinker:// final sampler path",
     )
-    parser.add_argument("--run-name", default="rltf-sd")
+    parser.add_argument("--run-name", default="rltf_sft")
     parser.add_argument("--lora-rank", type=int, default=16)
     parser.add_argument("--epochs", type=int, default=2)
     parser.add_argument("--batch-size", type=int, default=16)
