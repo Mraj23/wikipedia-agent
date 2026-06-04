@@ -1,9 +1,10 @@
+# GRPO length-reward control (src/train_grpo_length.py).
+# reward = max(0, 1 - alpha * n_output_tokens / token_budget) if correct else 0
+# Defaults used by scripts/07_train_controls.sh; sweep alpha/budget to trace a
+# Pareto curve to compare against the RLTF-SFT point at equal output tokens.
 alpha_sweep: [0.05, 0.1, 0.2]
 token_budget_sweep: [32, 64, 96]
 group_size: 8
+batch_size: 16
+steps: 200
 learning_rate: 1.0e-5
-epochs: 1
-note: |
-  Stub. Implement after RLTF-SD data generation works (plan §11).
-  Pattern: GRPO with reward = max(0, 1 - alpha * reasoning_tokens / budget)
-  if correct else 0. Use Tinker's importance_sampling loss.

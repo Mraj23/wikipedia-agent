@@ -1,11 +1,13 @@
 """LoRA SFT on (prompt, completion) pairs via Tinker.
 
-Same script for three conditions:
-  - SFT-caveman:  data/train/sft_caveman.jsonl (model's own short y0)
-  - RLTF-SD:      data/train/rltf_sd.jsonl     (filtered y1 via §8)
-  - SFT-y1:       data/train/sft_y1.jsonl      (ablation C: unfiltered y1)
+Same script for every SFT arm (datasets built by src/build_sft_dataset.py):
+  - rltf_sft:     data/train/rltf_sft.jsonl    (correct + shorter y1)
+  - sft_y1:       data/train/sft_y1.jsonl      (correct y1, no length gate)
+  - sft_caveman:  data/train/sft_caveman.jsonl (model's own shortest correct y0)
 
-Pattern matches faithfulness_v2/train_move_only.py: create LoRA training
+This is upstream RLTF's *SFT* distillation mode, not RLTF-SD (see
+../FAITHFULNESS.md). Pattern matches faithfulness_v2/train_move_only.py:
+create LoRA training
 client, build supervised datums via tinker_cookbook.supervised.data with
 TrainOnWhat.LAST_ASSISTANT_MESSAGE so loss is masked to assistant tokens
 only, then forward_backward + optim_step. Final weights are saved with

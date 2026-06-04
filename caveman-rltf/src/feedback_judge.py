@@ -18,8 +18,8 @@ from anthropic import AsyncAnthropic
 from prompts import build_judge_messages
 
 
-async def critique_one(client, judge_model, max_tokens, question, gold, y0):
-    system, user = build_judge_messages(question, gold, y0)
+async def critique_one(client, judge_model, max_tokens, question, gold, y0, mode):
+    system, user = build_judge_messages(question, gold, y0, mode=mode)
     msg = await client.messages.create(
         model=judge_model,
         max_tokens=max_tokens,
@@ -55,6 +55,7 @@ async def amain(args):
                     row["question"],
                     row["gold"],
                     row["raw_output"],
+                    args.feedback_mode,
                 )
                 err = None
             except Exception as e:
@@ -75,6 +76,7 @@ async def amain(args):
             obj = dict(row)
             obj["c0"] = c0
             obj["judge_model"] = args.judge_model
+            obj["feedback_mode"] = args.feedback_mode
             obj["judge_error"] = err
             f.write(json.dumps(obj) + "\n")
             if c0:
@@ -89,6 +91,13 @@ def main():
     parser.add_argument("--input", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--judge-model", default="claude-sonnet-4-6")
+    parser.add_argument(
+        "--feedback-mode",
+        default="caveman",
+        choices=["caveman", "generic"],
+        help="caveman = strict caveman-style critique (main); generic = "
+        "plain concision critique (ablation: does feedback CONTENT matter?)",
+    )
     parser.add_argument("--max-tokens", type=int, default=1024)
     parser.add_argument("--concurrency", type=int, default=8)
     parser.add_argument("--max-rows", type=int, default=None)

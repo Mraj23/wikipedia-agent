@@ -2,8 +2,13 @@
 
 If --sampler-path is provided (tinker:// URI from a training manifest),
 the eval samples from that checkpoint. Otherwise it evaluates the base
-model. Inference is greedy (temp=0) and feedback-free (just x0) per
-plan §13.
+model. Inference is greedy (temp=0) and feedback-free.
+
+--prompt-condition selects the inference prompt (plain / concise /
+chain_of_draft / caveman). The key internalization test is evaluating a
+TRAINED checkpoint under `--prompt-condition plain`: if it stays terse
+without the caveman prompt, the compression was internalized rather than
+merely prompted.
 """
 
 import argparse
@@ -14,7 +19,7 @@ from pathlib import Path
 from transformers import AutoTokenizer
 
 from grade import grade_one
-from prompts import build_x0
+from prompts import build_prompt
 from _tinker import (
     build_sampling_client,
     build_sampling_client_from_path,
@@ -55,37 +60,41 @@ async def amain(args):
 
     async def run_one(row):
         nonlocal done
-        x0 = build_x0(row["question"])
+        prompt = build_prompt(args.prompt_condition, row["question"])
         async with sem:
             texts = await sample_many(
-                sc, renderer, tokenizer, x0, sp, n_samples=1
+                sc, renderer, tokenizer, prompt, sp, n_samples=1
             )
         done += 1
         if done % 25 == 0 or done == total:
             print(f"  {done}/{total}")
-        return row, x0, texts[0]
+        return row, prompt, texts[0]
 
     results = await asyncio.gather(*(run_one(r) for r in rows))
 
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w") as f:
-        for row, x0, text in results:
-            g = grade_one(text, row["gold"])
+        for row, prompt, text in results:
+            g = grade_one(text, row["gold"], row.get("task"))
             reasoning_tokens = len(
                 tok.encode(g["reasoning_text"], add_special_tokens=False)
             )
             answer_tokens = len(
                 tok.encode(g["answer_text"], add_special_tokens=False)
             )
+            # total_output_tokens is parser-independent and is the PRIMARY
+            # length axis (the quantity Caveman actually targets). reasoning
+            # tokens are secondary and only reliable when parse_success.
             total_tokens = len(tok.encode(text, add_special_tokens=False))
             obj = {
                 "id": row["id"],
                 "task": row["task"],
                 "condition": args.condition,
+                "prompt_condition": args.prompt_condition,
                 "question": row["question"],
                 "gold": row["gold"],
-                "prompt": x0,
+                "prompt": prompt,
                 "raw_output": text,
                 "model": args.model,
                 "sampler": sampler_label,
@@ -114,7 +123,13 @@ def main():
     parser.add_argument(
         "--condition",
         required=True,
-        help="label for this eval, e.g. base / sft_caveman / rltf_sd",
+        help="label for the model/training arm, e.g. base / rltf_sft / grpo_length",
+    )
+    parser.add_argument(
+        "--prompt-condition",
+        default="caveman",
+        choices=["plain", "concise", "chain_of_draft", "caveman"],
+        help="inference prompt; use 'plain' on a trained model to test internalization",
     )
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--top-p", type=float, default=1.0)
