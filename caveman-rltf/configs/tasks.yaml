@@ -11,6 +11,12 @@ tasks:
   logical_deduction:
     type: bbh
     name: logical_deduction_seven_objects
+  date_understanding:        # multi-step date arithmetic; small models fail
+    type: bbh
+    name: date_understanding
+  temporal_sequences:        # time/ordering reasoning
+    type: bbh
+    name: temporal_sequences
   gsm8k:
     type: gsm8k
 
