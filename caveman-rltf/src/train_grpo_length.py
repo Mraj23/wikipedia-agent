@@ -41,10 +41,21 @@ from prompts import build_prompt
 from _tinker import resolve_async, clean_generation
 
 
-def length_reward(correct: bool, n_tokens: int, alpha: float, budget: int) -> float:
+def length_reward(correct: bool, n_tokens: int, alpha: float, norm: int) -> float:
+    """Length-shaped reward with a LIVE gradient.
+
+    correct answers: 1 - alpha * min(n, norm)/norm  -> in [1-alpha, 1]
+    wrong / incomplete: 0
+
+    No zero-floor cliff: a correct answer ALWAYS out-scores a wrong one
+    (>= 1-alpha > 0) and a shorter correct answer always out-scores a longer
+    one. The old `max(0, 1 - alpha*n/budget)` floored to 0 above n=budget,
+    so when the model's natural length exceeded the budget every correct
+    answer scored 0 = same as wrong, killing the gradient (the v3 null).
+    """
     if not correct:
         return 0.0
-    return max(0.0, 1.0 - alpha * n_tokens / max(budget, 1))
+    return 1.0 - alpha * min(n_tokens, norm) / max(norm, 1)
 
 
 def alpha_at(step: int, steps: int, warmup_frac: float, alpha_max: float) -> float:
@@ -140,6 +151,10 @@ async def amain(args):
             base_model=args.model, rank=args.lora_rank
         )
     )
+    # Resume after a JWT expiry / interruption: reload optimizer+weights state.
+    if args.resume_state:
+        print(f"resuming from state: {args.resume_state} (start_step={args.start_step})")
+        await resolve_async(training_client.load_state_with_optimizer_async(args.resume_state))
     tokenizer = training_client.get_tokenizer()
     renderer = get_renderer(args.renderer, tokenizer, model_name=args.model)
     adam = tinker.AdamParams(learning_rate=args.learning_rate, beta1=0.9, beta2=0.95)
@@ -155,8 +170,9 @@ async def amain(args):
     sem = asyncio.Semaphore(args.concurrency)
 
     sampled_tokens = 0  # hard spend guard: stop before exceeding the cap
+    state_path_file = out_dir / "latest_state.txt"
 
-    for step in range(args.steps):
+    for step in range(args.start_step, args.steps):
         if sampled_tokens >= args.max_sample_tokens:
             print(f"  [cap] hit max_sample_tokens={args.max_sample_tokens:,} "
                   f"at step {step} (sampled {sampled_tokens:,}); stopping early")
@@ -259,6 +275,19 @@ async def amain(args):
               f"think={entry['mean_thinking_tokens']:.0f} datums={len(datums)} "
               f"loss={loss} sampled_tok={sampled_tokens:,}")
 
+        # Resumable checkpoint, so a JWT expiry / interruption can continue
+        # instead of restarting (and re-spending). Relaunch with
+        # --resume-state <path> --start-step <step+1>.
+        if args.save_state_every and (step + 1) % args.save_state_every == 0:
+            st = await resolve_async(
+                training_client.save_state_async(
+                    name=f"{args.run_name}-state-{step:04d}", ttl_seconds=3600 * 24
+                )
+            )
+            state_path_file.write_text(json.dumps({"state_path": st.path, "next_step": step + 1}))
+            print(f"  [state] saved -> {st.path} (resume: --resume-state {st.path} "
+                  f"--start-step {step + 1})")
+
     # Final trajectory point + checkpoint.
     final = await resolve_async(
         training_client.save_weights_for_sampler_async(
@@ -306,7 +335,10 @@ def main():
     parser.add_argument("--warmup-frac", type=float, default=0.4,
                         help="fraction of steps with alpha=0 (pure correctness RL)")
     parser.add_argument("--alpha-max", type=float, default=0.5)
-    parser.add_argument("--token-budget", type=int, default=1024)
+    parser.add_argument("--token-budget", type=int, default=3072,
+                        help="length normalizer: penalty reaches alpha at this many "
+                        "tokens. Keep >= the model's natural length so the gradient "
+                        "stays live (no zero-floor).")
     # GRPO
     parser.add_argument("--group-size", type=int, default=8)
     parser.add_argument("--batch-size", type=int, default=8)
@@ -321,6 +353,12 @@ def main():
     parser.add_argument("--max-sample-tokens", type=int, default=2_500_000,
                         help="hard spend guard: stop before sampling more than this "
                         "many tokens (rollouts + evals)")
+    # resume after JWT expiry / interruption
+    parser.add_argument("--save-state-every", type=int, default=6,
+                        help="save a resumable optimizer+weights checkpoint every N steps")
+    parser.add_argument("--resume-state", default=None,
+                        help="tinker:// state path to resume from")
+    parser.add_argument("--start-step", type=int, default=0)
     # in-run trajectory eval
     parser.add_argument("--eval-data", default=None)
     parser.add_argument("--eval-every", type=int, default=6)
