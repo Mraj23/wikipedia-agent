@@ -16,6 +16,24 @@ tokens, completed-within-budget reward). Held-out eval (n=16, GSM8K), greedy.
 **Net: +25 pts completed-accuracy, −34% output tokens, closed-`</think>` stays
 high (no reward hack).** Plot: `outputs/plots/traj_4b_gsm8k_long.png`. Cost ~$3.
 
+### Firm-up on the FULL 100 held-out (base vs trained, plain prompt, greedy)
+
+| metric | base | trained | Δ |
+|---|---|---|---|
+| completed-accuracy | 77% | **92%** | **+15 pts** |
+| raw accuracy | 82% | 93% | +11 |
+| mean output tokens | 1940 | **1343** | **−31%** |
+| completion-rate | 81% | 94% | +13 |
+| accuracy / 1k tokens | 0.40 | **0.69** | **+73%** |
+
+Paired completed-accuracy delta **+0.15, 95% CI [+0.08, +0.23]** (n=100, same
+prompts) — significant. Decomposition from the trajectory: α=0 warmup trims
+tokens ~9% (correctness RL cutting overthinking), the length-penalty phase cuts
+a further ~27% — **while accuracy rises, not falls.** Defensible claim: the
+length penalty compresses output ~31% at no accuracy cost, model still finishes
+its reasoning. (The +15 accuracy itself is mostly correctness-RL elicitation,
+not compression — state separately.)
+
 Two effects, stated separately:
 - Warmup (α=0, steps 0–24): correctness RL raises accuracy 69→88% (raw acc rose
   too — elicitation), tokens drift 2125→1941.
