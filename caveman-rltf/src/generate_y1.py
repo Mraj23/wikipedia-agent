@@ -29,37 +29,38 @@ async def amain(args):
     async def run_one(row):
         nonlocal done
         async with sem:
-            texts = await sample_many(
+            samples = await sample_many(
                 sc, renderer, tokenizer, row["x1"], sp, n_samples=args.n_samples
             )
         done += 1
         if done % 25 == 0 or done == total:
             print(f"  {done}/{total}")
-        return row, texts
+        return row, samples
 
     results = await asyncio.gather(*(run_one(r) for r in rows))
 
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w") as f:
-        for row, texts in results:
-            for i, text in enumerate(texts):
+        for row, samples in results:
+            for i, s in enumerate(samples):
                 obj = dict(row)
                 obj["y1_sample_idx"] = i
-                obj["raw_output"] = text  # so grade.py picks it up
+                obj["raw_output"] = s["text"]  # so grade.py picks it up
+                obj["n_gen_tokens"] = s["n_tokens"]
                 f.write(json.dumps(obj) + "\n")
     print(f"wrote {len(results) * args.n_samples} -> {out_path}")
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="Qwen/Qwen2.5-7B-Instruct")
-    parser.add_argument("--renderer", default="qwen2_5_instruct")
+    parser.add_argument("--model", default="Qwen/Qwen3.6-35B-A3B")
+    parser.add_argument("--renderer", default="qwen3")
     parser.add_argument("--input", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--top-p", type=float, default=1.0)
-    parser.add_argument("--max-new-tokens", type=int, default=256)
+    parser.add_argument("--max-new-tokens", type=int, default=2048)
     parser.add_argument("--n-samples", type=int, default=2)
     parser.add_argument("--concurrency", type=int, default=16)
     args = parser.parse_args()

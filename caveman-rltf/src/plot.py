@@ -1,10 +1,59 @@
-"""Pareto plot per task and combined: accuracy vs mean reasoning tokens."""
+"""Pareto plots: accuracy vs tokens, per task and combined.
+
+Two x-axes are drawn:
+  - thinking tokens  (pareto_think_*.png)  -- the "brain" / primary result
+  - answer tokens    (pareto_answer_*.png) -- the visible "mouth"
+Accuracy error bars are the bootstrap 95% CI.
+"""
+
+from __future__ import annotations
 
 import argparse
 from pathlib import Path
 
 import pandas as pd
 import matplotlib.pyplot as plt
+
+
+def _label(row):
+    return f"{row['condition']}/{row['prompt_condition']}"
+
+
+def _scatter(ax, sub, xcol):
+    yerr = [
+        (sub["accuracy"] - sub["accuracy_ci_lo"]).clip(lower=0),
+        (sub["accuracy_ci_hi"] - sub["accuracy"]).clip(lower=0),
+    ]
+    ax.errorbar(sub[xcol], sub["accuracy"], yerr=yerr, fmt="o", ms=7, capsize=3, alpha=0.8)
+    for _, r in sub.iterrows():
+        ax.annotate(
+            _label(r), (r[xcol], r["accuracy"]),
+            fontsize=7, xytext=(4, 4), textcoords="offset points",
+        )
+
+
+def _make(df, out_dir, xcol, tag, xlabel):
+    fig, ax = plt.subplots(figsize=(10, 7))
+    for _, sub in df.groupby("task"):
+        _scatter(ax, sub, xcol)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel("exact-match accuracy")
+    ax.set_title(f"Caveman RLTF-SFT: accuracy vs {xlabel} (all tasks)")
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(out_dir / f"pareto_{tag}_combined.png", dpi=150)
+    plt.close(fig)
+
+    for task, sub in df.groupby("task"):
+        fig, ax = plt.subplots(figsize=(9, 6))
+        _scatter(ax, sub, xcol)
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel("exact-match accuracy")
+        ax.set_title(str(task))
+        ax.grid(True, alpha=0.3)
+        fig.tight_layout()
+        fig.savefig(out_dir / f"pareto_{tag}_{task}.png", dpi=150)
+        plt.close(fig)
 
 
 def main():
@@ -17,41 +66,8 @@ def main():
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    fig, ax = plt.subplots(figsize=(9, 7))
-    for task, sub in df.groupby("task"):
-        ax.scatter(sub["mean_reasoning_tokens"], sub["accuracy"], s=80, label=task)
-        for _, r in sub.iterrows():
-            ax.annotate(
-                r["condition"],
-                (r["mean_reasoning_tokens"], r["accuracy"]),
-                fontsize=8,
-                xytext=(4, 4),
-                textcoords="offset points",
-            )
-    ax.set_xlabel("mean reasoning tokens")
-    ax.set_ylabel("exact-match accuracy")
-    ax.set_title("Caveman RLTF: accuracy vs reasoning tokens")
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(out_dir / "pareto_combined.png", dpi=150)
-    plt.close(fig)
-
-    for task, sub in df.groupby("task"):
-        fig, ax = plt.subplots(figsize=(8, 6))
-        for cond, csub in sub.groupby("condition"):
-            ax.scatter(
-                csub["mean_reasoning_tokens"], csub["accuracy"], s=80, label=cond
-            )
-        ax.set_xlabel("mean reasoning tokens")
-        ax.set_ylabel("exact-match accuracy")
-        ax.set_title(task)
-        ax.legend()
-        ax.grid(True, alpha=0.3)
-        fig.tight_layout()
-        fig.savefig(out_dir / f"pareto_{task}.png", dpi=150)
-        plt.close(fig)
-
+    _make(df, out_dir, "mean_thinking_tokens", "think", "mean thinking tokens")
+    _make(df, out_dir, "mean_answer_tokens", "answer", "mean answer tokens")
     print(f"plots -> {out_dir}")
 
 

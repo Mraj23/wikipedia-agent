@@ -1,14 +1,14 @@
-base_model: Qwen/Qwen2.5-7B-Instruct
-renderer: qwen2_5_instruct
-model_tag: qwen2_5_7b
+# Thinking models (hybrid). Tinker exposes only (base_model, rank) for LoRA.
+# Renderer `qwen3` keeps thinking ON (native <think>...</think>).
+#
+# Primary (cheap MoE, default everywhere):
+base_model: Qwen/Qwen3.6-35B-A3B
+renderer: qwen3
+model_tag: qwen3_6_35b_a3b
 lora_rank: 16
-lora_alpha: 32
-lora_dropout: 0.05
-target_modules:
-  - q_proj
-  - k_proj
-  - v_proj
-  - o_proj
-  - gate_proj
-  - up_proj
-  - down_proj
+
+# Secondary dense model — run the whole pipeline a second time with:
+#   MODEL=Qwen/Qwen3.5-9B RENDERER=qwen3 scripts/0*.sh
+# (avoid Qwen3.5-4B: too small; do not use any Qwen2.5.)
+alt_models:
+  - Qwen/Qwen3.5-9B

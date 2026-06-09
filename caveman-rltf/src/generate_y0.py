@@ -36,21 +36,21 @@ async def amain(args):
         nonlocal done
         x0 = build_x0(row["question"])
         async with sem:
-            texts = await sample_many(
+            samples = await sample_many(
                 sc, renderer, tokenizer, x0, sp, n_samples=args.n_samples
             )
         done += 1
         if done % 25 == 0 or done == total:
             print(f"  {done}/{total}")
-        return row, x0, texts
+        return row, x0, samples
 
     results = await asyncio.gather(*(run_one(r) for r in rows))
 
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w") as f:
-        for row, x0, texts in results:
-            for i, text in enumerate(texts):
+        for row, x0, samples in results:
+            for i, s in enumerate(samples):
                 obj = {
                     "id": row["id"],
                     "sample_idx": i,
@@ -58,7 +58,8 @@ async def amain(args):
                     "question": row["question"],
                     "gold": row["gold"],
                     "x0": x0,
-                    "raw_output": text,
+                    "raw_output": s["text"],
+                    "n_gen_tokens": s["n_tokens"],
                     "model": args.model,
                     "temperature": args.temperature,
                 }
@@ -68,13 +69,13 @@ async def amain(args):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="Qwen/Qwen2.5-7B-Instruct")
-    parser.add_argument("--renderer", default="qwen2_5_instruct")
+    parser.add_argument("--model", default="Qwen/Qwen3.6-35B-A3B")
+    parser.add_argument("--renderer", default="qwen3")
     parser.add_argument("--input", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--top-p", type=float, default=1.0)
-    parser.add_argument("--max-new-tokens", type=int, default=256)
+    parser.add_argument("--max-new-tokens", type=int, default=2048)
     parser.add_argument("--n-samples", type=int, default=4)
     parser.add_argument("--concurrency", type=int, default=16)
     args = parser.parse_args()

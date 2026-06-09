@@ -1,0 +1,14 @@
+# SFT hyperparams for train_sft.py (used by rltf_sft / sft_y1 / sft_caveman
+# arms). Only keys train_sft.py actually reads are listed; the old
+# gradient_accumulation_steps / warmup_ratio / eval_every_steps keys were
+# removed because the trainer does not implement them (one batch = one
+# optim step, no in-training eval).
+epochs: 2
+learning_rate: 1.0e-5
+batch_size: 16
+max_seq_length: 2048
+weight_decay: 0.0
+adam_beta1: 0.9
+adam_beta2: 0.95
+save_sampler_every_steps: 0   # 0 = only save final; set >0 for intermediates
+seed: 0

@@ -1,7 +1,25 @@
-dataset: lukaemon/bbh
+# One math (gsm8k) + two non-math (BBH) reasoning tasks, per the blog plan.
+# BBH tasks have only 250 rows each; eval is allocated first so it is never
+# empty (see src/load_bbh.py). GSM8K uses its own train/test splits.
+#
+# Override at the CLI, e.g. only the two BBH tasks:
+#   python src/load_bbh.py --tasks tracking_shuffled_objects logical_deduction
 tasks:
-  tracking_shuffled_objects: tracking_shuffled_objects_seven_objects
-  logical_deduction: logical_deduction_seven_objects
-train_n: 1000
-eval_n: 250
+  tracking_shuffled_objects:
+    type: bbh
+    name: tracking_shuffled_objects_seven_objects
+  logical_deduction:
+    type: bbh
+    name: logical_deduction_seven_objects
+  date_understanding:        # multi-step date arithmetic; small models fail
+    type: bbh
+    name: date_understanding
+  temporal_sequences:        # time/ordering reasoning
+    type: bbh
+    name: temporal_sequences
+  gsm8k:
+    type: gsm8k
+
+train_n: 150   # per task; BBH caps at 150 (250 rows - 100 eval)
+eval_n: 100    # per task, held-out
 seed: 0

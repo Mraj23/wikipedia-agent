@@ -1,11 +1,13 @@
 """LoRA SFT on (prompt, completion) pairs via Tinker.
 
-Same script for three conditions:
-  - SFT-caveman:  data/train/sft_caveman.jsonl (model's own short y0)
-  - RLTF-SD:      data/train/rltf_sd.jsonl     (filtered y1 via §8)
-  - SFT-y1:       data/train/sft_y1.jsonl      (ablation C: unfiltered y1)
+Same script for every SFT arm (datasets built by src/build_sft_dataset.py):
+  - rltf_sft:     data/train/rltf_sft.jsonl    (correct + shorter y1)
+  - sft_y1:       data/train/sft_y1.jsonl      (correct y1, no length gate)
+  - sft_caveman:  data/train/sft_caveman.jsonl (model's own shortest correct y0)
 
-Pattern matches faithfulness_v2/train_move_only.py: create LoRA training
+This is upstream RLTF's *SFT* distillation mode, not RLTF-SD (see
+../FAITHFULNESS.md). Pattern matches faithfulness_v2/train_move_only.py:
+create LoRA training
 client, build supervised datums via tinker_cookbook.supervised.data with
 TrainOnWhat.LAST_ASSISTANT_MESSAGE so loss is masked to assistant tokens
 only, then forward_backward + optim_step. Final weights are saved with
@@ -159,15 +161,15 @@ async def amain(args):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="Qwen/Qwen2.5-7B-Instruct")
-    parser.add_argument("--renderer", default="qwen2_5_instruct")
+    parser.add_argument("--model", default="Qwen/Qwen3.6-35B-A3B")
+    parser.add_argument("--renderer", default="qwen3")
     parser.add_argument("--train", required=True)
     parser.add_argument(
         "--output",
         required=True,
         help="dir for manifest.json with the tinker:// final sampler path",
     )
-    parser.add_argument("--run-name", default="rltf-sd")
+    parser.add_argument("--run-name", default="rltf_sft")
     parser.add_argument("--lora-rank", type=int, default=16)
     parser.add_argument("--epochs", type=int, default=2)
     parser.add_argument("--batch-size", type=int, default=16)

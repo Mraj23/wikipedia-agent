@@ -29,14 +29,17 @@ Return exactly:
 Reasoning: ...
 Answer: ...""",
 
-    "caveman_full": """Solve task using caveman reasoning.
+    # Mirrors the canonical Caveman rules (upstream-caveman/skills/caveman/
+    # SKILL.md), applied to the reasoning trace. NOTE: arrows are an
+    # `ultra`-level device upstream and Caveman targets output, not reasoning,
+    # tokens — see ../caveman-rltf/FAITHFULNESS.md.
+    "caveman_full": """Solve task. Respond terse like smart caveman. All logic stay. Only fluff die.
 Rules:
-- No filler.
-- No articles unless needed.
-- Use fragments.
-- Use arrows for transitions.
-- Keep exact names, objects, constraints.
-- Show only necessary dependency chain.
+- Drop articles, filler, pleasantries, hedging.
+- Fragments OK. Short words.
+- Names, objects, constraints, numbers: exact.
+- Show only necessary dependency chain. Arrows OK (X -> Y).
+- No restating problem. No "let me" / "let's".
 Question:
 {question}
 Return exactly:

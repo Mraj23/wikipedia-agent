@@ -1,42 +1,75 @@
-# Caveman RLTF Pipeline
+# Caveman RLTF-SFT
 
-Two-turn RLTF-SD (self-distillation) training pipeline to teach an 8B
-instruct model to produce shorter caveman-style reasoning while preserving
-accuracy on non-math BBH tasks.
+**Question:** can text feedback teach a thinking model to internalize
+Caveman-style terse *thinking*, so it spends fewer **thinking tokens** —
+*without* a terse prompt at inference, and at no accuracy cost?
 
-## RLTF loop
+Models (thinking/hybrid, via Tinker LoRA):
+- **`Qwen/Qwen3.6-35B-A3B`** — primary (cheap MoE), renderer `qwen3`.
+- **`Qwen/Qwen3.5-9B`** — secondary dense check: rerun with
+  `MODEL=Qwen/Qwen3.5-9B RENDERER=qwen3 ...`.
+
+(Do not use Qwen2.5 or Qwen3.5-4B — too old / too small.)
+Judge: Anthropic Claude. Tasks: one math (`gsm8k`) + two non-math BBH
+(`tracking_shuffled_objects`, `logical_deduction`).
+
+## Two honest framing notes (read first)
+
+1. **This is RLTF-*SFT*, not RLTF-SD.** We do correctness-filtered supervised
+   fine-tuning on the feedback-improved attempt. Upstream RLTF-SD is an
+   advantage-weighted importance-sampling objective trained jointly with
+   multi-turn GRPO — what we build is upstream's *SFT* distillation mode
+   (≈ rejection-sampling / STaR). See [FAITHFULNESS.md](FAITHFULNESS.md).
+2. **We extend Caveman beyond its stated scope, on purpose.** Caveman shrinks
+   visible *output* prose, not hidden reasoning ("mouth, not brain"). We apply
+   the terse style to the **thinking trace** and ask whether the brain can be
+   shrunk without getting dumber. Because Qwen3.x is a real thinking model, we
+   measure `<think>` tokens and answer tokens **separately**; the primary axis
+   is **thinking tokens**.
+
+## RLTF-SFT loop
 
 ```
-x0     original prompt (caveman instructions + question)
-y0     first answer
-c0     structured critique from a stronger judge
-x1     x0 + y0 + c0 + revise instruction
-y1     revised answer
-train  LoRA on (x0 -> y1) filtered for {y1 correct AND
-       (y0 incorrect OR y1 reasoning <= 0.8 * y0 reasoning)}
+x0     caveman prompt + question      (model thinks in <think>...</think>)
+y0     first attempt (thinking + answer)
+c0     critique from a stronger judge (given the gold answer)
+x1     x0 + y0 + c0 + "re-think shorter"
+y1     revised attempt
+train  LoRA cross-entropy on (x0 -> y1), kept iff
+       { y1 correct AND (y0 incorrect OR tokens(y1) <= 0.8*tokens(y0)) }
 ```
 
-Feedback is available at training time but NOT at inference. The model must
-internalize the compression instruction.
+Feedback is present at training time but **removed at inference** — the model
+sees only `x0 -> y1`, so it must internalize the compression.
 
-## Stages and conditions
+## Conditions
 
-| Condition | Trainer | Data |
+Prompt-only arms (base model, no training):
+
+| Prompt | Effect on thinking |
+|---|---|
+| `plain` | think normally |
+| `concise` | "keep thinking brief" |
+| `chain_of_draft` | minimal draft steps (Xu et al. 2025) |
+| `caveman` | canonical caveman rules applied to thinking |
+
+Trained arms, each evaluated under **both `plain` and `caveman`** prompts — the
+`plain` eval is the internalization test:
+
+| Arm | Data | Tests |
 |---|---|---|
-| SFT-caveman | `src/train_sft.py` | model's own short correct y0 |
-| GRPO-length | `src/train_grpo_length.py` (stub) | correctness + length scalar |
-| RLTF-SD-compression | `src/train_sft.py` | filtered (x0, y1) from §8 |
-| RLTF-SD-random-feedback | `src/train_sft.py` | feedback shuffled across rows |
+| `rltf_sft` | correct + shorter y1 | main result |
+| `sft_caveman` | model's shortest correct y0 | do you even need the revision? |
+| `sft_y1` | correct y1, no length gate | effect of the length filter |
+| `grpo_length` | RL, reward = short-if-correct (`train_grpo_length.py`) | does feedback beat a length reward? |
 
-## Stack
+Feedback ablations (rebuild y1 via `scripts/02` env vars, then retrain):
 
-- **Inference + training:** Tinker (`tinker.ServiceClient`,
-  `create_lora_training_client_async`, `forward_backward_async`,
-  `optim_step_async`, `save_weights_for_sampler_async`).
-- **Judge:** Anthropic Claude (configurable via `--judge-model`), structured
-  feedback per the §6.2 schema.
-- **Model:** `Qwen/Qwen2.5-7B-Instruct` with `qwen2_5_instruct` renderer
-  by default. Override via `--model` / `--renderer`.
+- `FEEDBACK_MODE=generic` — generic concise critique instead of caveman.
+- `X1_ABLATION=--shuffle-feedback` — revise against *another* row's critique
+  (does the critique *content* matter, or just the revise-shorter pressure?).
+- `X1_ABLATION=--no-feedback` — revise-shorter with no critique (rejection
+  -sampling lower bound).
 
 ## Setup
 
@@ -49,45 +82,55 @@ export ANTHROPIC_API_KEY=...
 ## Run order
 
 ```
-scripts/00_prepare_data.sh        # BBH -> data/processed/{train,eval}.jsonl
-scripts/01_generate_y0.sh         # n_samples=4 at temp=0.7
-scripts/02_generate_feedback.sh   # Claude critique
-scripts/03_generate_y1.sh         # n_samples=2 at temp=0.7
-scripts/04_build_sd_dataset.sh    # filter + format SFT pairs
-scripts/05_train_rltf_sd.sh       # LoRA SFT on (x0 -> y1)
-scripts/06_eval.sh                # held-out eval, temp=0
+scripts/00_prepare_data.sh      # tasks -> data/processed/{train,eval}.jsonl
+scripts/01_generate_y0.sh       # caveman first attempts, n=4 @ temp 0.7
+scripts/02_generate_feedback.sh # Claude critique + build x1
+scripts/03_generate_y1.sh       # revisions, n=2 @ temp 0.7
+scripts/04_build_sft_dataset.sh # filter -> data/train/rltf_sft.jsonl
+scripts/05_train_rltf_sft.sh    # LoRA SFT on (x0 -> y1)
+scripts/07_train_controls.sh    # sft_caveman, sft_y1, grpo_length (optional)
+scripts/06_eval.sh              # eval matrix + summary.csv + Pareto plots
 ```
 
-Each script is thin — it reads env-var defaults and calls the matching
-`src/*.py`.
+Add trained arms to the eval matrix:
+```
+RUN_NAMES='rltf_sft sft_caveman sft_y1 grpo_length' scripts/06_eval.sh
+```
+
+Rerun the whole thing on the 9B model:
+```
+MODEL=Qwen/Qwen3.5-9B RENDERER=qwen3 scripts/01_generate_y0.sh   # ...etc
+```
+
+## Metrics (`outputs/evals/summary.csv`)
+
+accuracy (+ bootstrap 95% CI), **mean/median thinking tokens** (primary),
+mean answer tokens, mean total output tokens, accuracy per 1k thinking tokens,
+think-compression ratio vs the plain baseline, parse-success / has-thinking /
+invalid-answer rates, and accuracy within {64,128,256}-thinking-token budgets.
+`src/plot.py` draws accuracy-vs-thinking-token and accuracy-vs-answer-token
+Pareto plots with accuracy error bars.
+
+## Success bar
+
+Report a win only with non-overlapping accuracy CIs (or clearly within noise on
+accuracy while strictly fewer thinking tokens):
+
+- `rltf_sft` under the **plain** prompt is terser (fewer thinking tokens) than
+  `base/plain` at equal accuracy → terseness was internalized.
+- `rltf_sft` ≥ `grpo_length` at equal thinking tokens → feedback earns its keep.
+- `rltf_sft` ≥ `sft_caveman` and ≥ `sft_y1` → revision + length filter matter.
+- Holds (or is neutral) across math and non-math, and on both models.
+
+Run multiple `SEED`s before quoting any delta.
 
 ## Layout
 
 ```
-caveman-rltf/
-  configs/
-    model.yaml         # base model, renderer, LoRA rank
-    tasks.yaml         # task list, train/eval sizes
-    prompts.yaml       # human-readable mirror of src/prompts.py
-    rltf_sd.yaml       # SFT hyperparams
-    grpo_length.yaml   # GRPO sweep (used once train_grpo_length lands)
-  data/
-    raw/        processed/   rollouts/   feedback/   revised/   train/
-  src/          # see above
-  scripts/      # 00..06
-  outputs/
-    rollouts/   feedback/   revised/
-    checkpoints/   # tinker://... sampler paths recorded as manifest.json
-    evals/      plots/
+configs/   model.yaml tasks.yaml prompts.yaml rltf_sft.yaml grpo_length.yaml
+src/       load_bbh grade prompts generate_y0 feedback_judge build_x1
+           generate_y1 build_sft_dataset train_sft train_grpo_length
+           eval analyze plot _tinker
+scripts/   00..07
+outputs/   checkpoints/ (manifest.json per run) evals/ plots/
 ```
-
-## Success bar (plan §17)
-
-Proceed only if:
-
-- `RLTF-SD-compression` > `GRPO-length` at the same mean reasoning tokens
-- `RLTF-SD-compression` > `SFT-caveman` and > `SFT-y1` (ablation C)
-- Parse-success rate maintained
-- Improves on at least one task without hurting the other
-
-Strong target: ~71% / ~43 tokens vs base ~62% / ~90 tokens.
